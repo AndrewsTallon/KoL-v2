@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from dali_transport import DaliHidTransport
-from dali_controls import DaliControls, pct_to_level, clamp
+from .dali_transport import DaliHidTransport
+from .dali_controls import DaliControls, pct_to_level, clamp
 
 # Your captured endpoints:
 WARM_PRESET = (0x10, 0x27)  # "yellow"
