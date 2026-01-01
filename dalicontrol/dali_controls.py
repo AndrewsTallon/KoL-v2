@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, Dict, Any, List, Tuple, Optional
 
-from dali_transport import DaliHidTransport
+from .dali_transport import DaliHidTransport
 
 # ---------- Helpers ----------
 def clamp(v, lo, hi):
