@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import logging
 import os
 import re
@@ -71,19 +72,26 @@ class AIOperator:
         if not api_key:
             logging.info("OPENAI_API_KEY not set; using rules-based parser.")
             return None
-        try:
-            import openai  # type: ignore
+        if importlib.util.find_spec("openai") is None:
+            logging.info("OpenAI package not installed; using rules-based parser.")
+            return None
+        from openai import OpenAI
 
-            openai.api_key = api_key
-            self._openai_client = openai
-            logging.info("OpenAI client initialized with model-based parser.")
+        try:
+            self._openai_client = OpenAI(api_key=api_key)
         except Exception as exc:  # pragma: no cover - defensive
             logging.warning("OpenAI not available, falling back to rules: %s", exc)
             self._openai_client = None
+            return self._openai_client
+        logging.info("OpenAI client initialized with model-based parser.")
         return self._openai_client
 
     def _llm_plan(self, text: str) -> List[Dict[str, Any]]:
-        client = self._get_openai_client()
+        try:
+            client = self._get_openai_client()
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.warning("LLM setup failed (%s); using rules parser.", exc)
+            return self._rules_plan(text)
         if client is None:
             return self._rules_plan(text)
 
@@ -136,21 +144,27 @@ class AIOperator:
 
         model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         try:
-            response = client.ChatCompletion.create(  # type: ignore[attr-defined]
+            response = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                functions=functions,
-                function_call="auto",
+                tools=[
+                    {
+                        "type": "function",
+                        "function": functions[0],
+                    }
+                ],
+                tool_choice="auto",
             )
-            choice = response["choices"][0]["message"]
-            func_call = choice.get("function_call")
-            if not func_call:
+            choice = response.choices[0].message
+            tool_calls = choice.tool_calls or []
+            if not tool_calls:
                 logging.info("No function_call from model; using rules parser fallback.")
                 return self._rules_plan(text)
-            if func_call.get("name") != "set_actions":
-                logging.info("Unexpected function %s; using rules parser.", func_call.get("name"))
+            func_call = tool_calls[0].function
+            if func_call.name != "set_actions":
+                logging.info("Unexpected function %s; using rules parser.", func_call.name)
                 return self._rules_plan(text)
-            args = func_call.get("arguments") or "{}"
+            args = func_call.arguments or "{}"
             parsed = json.loads(args)
             actions = parsed.get("actions", [])
             logging.info("LLM proposed actions: %s", actions)
@@ -205,8 +219,6 @@ class AIOperator:
             return state.last_temp == WARM_PRESET
         if action == "off":
             return state.is_off
-        if action == "on_last":
-            return not state.is_off
         if action == "set_brightness_pct":
             pct = clamp(float(params.get("pct", 0.0)), 0.0, 100.0)
             level = int(round((pct / 100.0) * 254))
