@@ -7,17 +7,35 @@ from typing import Optional
 
 import serial
 
+
 @dataclass
 class OccupancyStatus:
     raw_present: Optional[bool] = None
     filt_occupied: Optional[bool] = None
-    last_line: str = ""
+
+    # richer signals from ESP32 JSON
+    moving: Optional[bool] = None
+    stationary: Optional[bool] = None
+
+    # BH1750 lux is a float (your ESP32 sends e.g. 375.83)
+    lux: Optional[float] = None
+
+    # timing/diagnostics
     updated_at: float = 0.0
+    last_line: str = ""
+
+    last_moving_at: float = 0.0
+    last_occupied_at: float = 0.0
+    moving_events: int = 0        # counts rising edges of moving
+    moving_age_ms: int = -1       # ms since last moving=true (computed at snapshot time)
+
 
 class UsbOccupancyReader:
     """
     Reads JSON lines from the ESP32 over USB serial.
-    Expected format: {"raw":true, "occupied":true, ...}
+
+    Expected format includes:
+      {"raw":true, "occupied":true, "moving":false, "stationary":true, "lux":375.83}
     """
 
     def __init__(self, port: str, baud: int = 115200):
@@ -28,6 +46,9 @@ class UsbOccupancyReader:
         self._thread: Optional[threading.Thread] = None
         self._ser: Optional[serial.Serial] = None
         self._lock = threading.Lock()
+
+        # internal edge tracking
+        self._moving_prev: Optional[bool] = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -46,8 +67,15 @@ class UsbOccupancyReader:
 
     def snapshot(self) -> OccupancyStatus:
         with self._lock:
-            # Return a copy of the current status
-            return OccupancyStatus(**self.status.__dict__)
+            snap = OccupancyStatus(**self.status.__dict__)
+
+        # compute moving age at snapshot time (so it’s always current)
+        if snap.last_moving_at and snap.last_moving_at > 0:
+            snap.moving_age_ms = int((time.time() - snap.last_moving_at) * 1000)
+        else:
+            snap.moving_age_ms = -1
+
+        return snap
 
     def _open(self) -> serial.Serial:
         return serial.Serial(self.port, self.baud, timeout=1, exclusive=True)
@@ -74,26 +102,55 @@ class UsbOccupancyReader:
                         text = line.decode("utf-8", errors="ignore").strip()
                         if not text:
                             continue
-                        
-                        # [FIX] Parse JSON instead of Regex
+
                         data = json.loads(text)
-                        
-                        # Extract the booleans from the JSON structure
-                        # {"raw": true, "occupied": true, ...}
+
+                        # Extract (backward compatible)
                         raw_val = data.get("raw")
-                        filt_val = data.get("occupied")
+                        occ_val = data.get("occupied")
+
+                        # NEW fields
+                        mov_val = data.get("moving")
+                        sta_val = data.get("stationary")
+                        lux_val = data.get("lux")
+
+                        now = time.time()
 
                         with self._lock:
                             if raw_val is not None:
                                 self.status.raw_present = bool(raw_val)
-                            if filt_val is not None:
-                                self.status.filt_occupied = bool(filt_val)
-                            
+
+                            if occ_val is not None:
+                                self.status.filt_occupied = bool(occ_val)
+                                if self.status.filt_occupied:
+                                    self.status.last_occupied_at = now
+
+                            if mov_val is not None:
+                                m = bool(mov_val)
+                                self.status.moving = m
+
+                                # rising edge count
+                                if self._moving_prev is False and m is True:
+                                    self.status.moving_events += 1
+                                self._moving_prev = m
+
+                                if m:
+                                    self.status.last_moving_at = now
+
+                            if sta_val is not None:
+                                self.status.stationary = bool(sta_val)
+
+                            if lux_val is not None:
+                                # BH1750 lux is float; accept int/float/str
+                                try:
+                                    self.status.lux = float(lux_val)
+                                except Exception:
+                                    pass
+
                             self.status.last_line = text
-                            self.status.updated_at = time.time()
+                            self.status.updated_at = now
 
                     except json.JSONDecodeError:
-                        # Ignore lines that aren't valid JSON (like startup messages)
                         continue
                     except Exception:
                         continue
