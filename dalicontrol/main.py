@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from .ai_operator import AIOperator, load_state, save_state
+from .cct_utils import dtr_to_kelvin
 from .dali_controls import DaliControls
 from .dali_transport import DaliHidTransport
 from .lamp_state import LampController
@@ -43,6 +44,8 @@ class TelemetryLogger:
         "lamp_level",
         "lamp_temp_dtr",
         "lamp_temp_dtr1",
+        "cct_kelvin",
+        "runtime_s",
         "action",
         "reason",
         "user_text",
@@ -86,6 +89,7 @@ def build_row(
     mode: str,
     snap,
     lamp: LampController,
+    runtime_tracker: dict,
     action: str = "",
     reason: str = "",
     user_text: str = "",
@@ -112,6 +116,8 @@ def build_row(
         "lamp_level": lamp.state.last_level,
         "lamp_temp_dtr": temp_dtr,
         "lamp_temp_dtr1": temp_dtr1,
+        "cct_kelvin": dtr_to_kelvin(temp_dtr, temp_dtr1),
+        "runtime_s": round(runtime_tracker.get("total_s", 0), 1),
         "action": action,
         "reason": reason,
         "user_text": user_text,
@@ -121,7 +127,7 @@ def build_row(
 # ---------------- Main ----------------
 
 def parse_args():
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description="KoL DALI Lighting Control")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--sensor-port", required=True)
     p.add_argument("--sensor-baud", type=int, default=115200)
@@ -131,6 +137,13 @@ def parse_args():
         choices=["baseline", "ai"],
         default="baseline",
         help="Labels telemetry so you can compare baseline vs AI runs later.",
+    )
+    p.add_argument("--web", action="store_true", help="Start the web dashboard server")
+    p.add_argument("--web-port", type=int, default=8080, help="Web server port (default: 8080)")
+    p.add_argument("--no-cli", action="store_true", help="Skip CLI input loop (use with --web)")
+    p.add_argument(
+        "--nominal-power", type=float, default=40.0,
+        help="Nominal luminaire power in watts for energy estimation (default: 40)",
     )
     return p.parse_args()
 
@@ -158,7 +171,7 @@ def main():
         lamp = LampController(controls, state)
         operator = AIOperator(lamp, dry_run=args.dry_run)
 
-        # A single lock for ALL lamp actions (sensor thread + AI thread)
+        # A single lock for ALL lamp actions (sensor thread + AI thread + web)
         lamp_lock = threading.Lock()
 
         # ---- Sensor reader init ----
@@ -167,6 +180,53 @@ def main():
 
         stop = threading.Event()
 
+        # ---- Runtime & energy tracking (shared mutable dict) ----
+        runtime_tracker = {
+            "total_s": 0.0,
+            "energy_wh": 0.0,
+            "_last_tick": time.time(),
+        }
+
+        # ---- Shared mutable mode/auto (can be changed from web UI) ----
+        app_state = {
+            "lamp": lamp,
+            "lamp_lock": lamp_lock,
+            "reader": reader,
+            "telem": telem,
+            "operator": operator,
+            "adaptive_engine": None,
+            "mode": args.mode,
+            "auto": args.auto,
+            "nominal_power_watts": args.nominal_power,
+            "runtime_tracker": runtime_tracker,
+        }
+
+        # ---- Adaptive engine (for AI mode) ----
+        adaptive_engine = None
+        if args.mode == "ai":
+            from .adaptive_engine import AdaptiveEngine
+            adaptive_engine = AdaptiveEngine(
+                lamp, lamp_lock,
+                nominal_power_watts=args.nominal_power,
+            )
+            # Try to load existing models, otherwise train
+            if not adaptive_engine.load_models():
+                adaptive_engine.train_from_baseline()
+
+            def on_adaptive_action(action_str, reason_str):
+                snap = reader.snapshot()
+                telem.log_row(build_row(
+                    mode=app_state["mode"], snap=snap, lamp=lamp,
+                    runtime_tracker=runtime_tracker,
+                    action=action_str, reason=reason_str,
+                ))
+
+            adaptive_engine.on_action = on_adaptive_action
+            adaptive_engine.start(reader)
+            app_state["adaptive_engine"] = adaptive_engine
+
+        # ---- Sensor loop (telemetry + auto-occupancy for baseline) ----
+
         def sensor_loop():
             # State tracking
             last_filt = None
@@ -174,22 +234,37 @@ def main():
             last_log_at = 0.0
             last_telem_at = 0.0
 
-            # Settings
-            DIM_DELAY = 10.0  # Seconds to wait at "dim" level before turning off
-            DIM_LEVEL = 10    # Percent brightness for the warning dim
+            # Settings (thesis-aligned: 60s absence timeout)
+            DIM_DELAY = 60.0   # Seconds to wait at "dim" level before turning off
+            DIM_LEVEL = 10     # Percent brightness for the warning dim
 
             while not stop.is_set():
                 snap = reader.snapshot()
                 filt = snap.filt_occupied
 
-                # --- Telemetry heartbeat: 1 row/sec even if nothing changes ---
                 now = time.time()
-                if now - last_telem_at >= 1.0:
-                    telem.log_row(build_row(mode=args.mode, snap=snap, lamp=lamp))
+
+                # --- Runtime & energy tracking ---
+                dt = now - runtime_tracker["_last_tick"]
+                runtime_tracker["_last_tick"] = now
+                if not lamp.state.is_off:
+                    runtime_tracker["total_s"] += dt
+                    dimming_frac = lamp.state.last_level / 254.0
+                    runtime_tracker["energy_wh"] += (
+                        app_state["nominal_power_watts"] * dimming_frac * dt / 3600.0
+                    )
+
+                # --- Telemetry heartbeat: 5-second intervals (thesis spec) ---
+                if now - last_telem_at >= 5.0:
+                    telem.log_row(build_row(
+                        mode=app_state["mode"], snap=snap, lamp=lamp,
+                        runtime_tracker=runtime_tracker,
+                    ))
                     last_telem_at = now
 
-                # Only run if --auto flag was used and sensor is sending data
-                if args.auto and (filt is not None):
+                # Only run auto-occupancy if enabled and sensor is sending data
+                # In AI mode, occupancy is handled by the adaptive engine
+                if app_state["auto"] and app_state["mode"] == "baseline" and (filt is not None):
 
                     # --- Case 1: Someone is PRESENT ---
                     if filt:
@@ -201,9 +276,10 @@ def main():
 
                                 telem.log_row(
                                     build_row(
-                                        mode=args.mode,
+                                        mode=app_state["mode"],
                                         snap=snap,
                                         lamp=lamp,
+                                        runtime_tracker=runtime_tracker,
                                         action="set_brightness_pct(75)",
                                         reason="auto_occupied_restore",
                                     )
@@ -223,9 +299,10 @@ def main():
 
                                 telem.log_row(
                                     build_row(
-                                        mode=args.mode,
+                                        mode=app_state["mode"],
                                         snap=snap,
                                         lamp=lamp,
+                                        runtime_tracker=runtime_tracker,
                                         action=f"set_brightness_pct({DIM_LEVEL})",
                                         reason="auto_vacant_dim",
                                     )
@@ -239,9 +316,10 @@ def main():
 
                                 telem.log_row(
                                     build_row(
-                                        mode=args.mode,
+                                        mode=app_state["mode"],
                                         snap=snap,
                                         lamp=lamp,
+                                        runtime_tracker=runtime_tracker,
                                         action="off()",
                                         reason="auto_vacant_off",
                                     )
@@ -293,26 +371,45 @@ def main():
                     # Log AFTER the command so lamp state reflects the result
                     telem.log_row(
                         build_row(
-                            mode=args.mode,
+                            mode=app_state["mode"],
                             snap=snap,
                             lamp=lamp,
+                            runtime_tracker=runtime_tracker,
                             action="user_command",
                             reason="user_text",
                             user_text=user_text,
                         )
                     )
 
+        # ---- Start threads ----
         t1 = threading.Thread(target=sensor_loop, name="sensor-loop", daemon=True)
-        t2 = threading.Thread(target=input_loop, name="input-loop", daemon=True)
         t1.start()
-        t2.start()
 
-        logging.info("Running. Auto=%s. Mode=%s. Ctrl-C to exit.", args.auto, args.mode)
+        # Start web server if requested
+        if args.web:
+            from .web_server import run_server
+            run_server(app_state, host="0.0.0.0", port=args.web_port)
+            logging.info("Web dashboard: http://localhost:%d", args.web_port)
+
+        # Start CLI input loop unless --no-cli
+        if not args.no_cli:
+            t2 = threading.Thread(target=input_loop, name="input-loop", daemon=True)
+            t2.start()
+
+        logging.info(
+            "Running. Auto=%s. Mode=%s. Web=%s. Ctrl-C to exit.",
+            app_state["auto"], app_state["mode"], args.web,
+        )
 
         while not stop.is_set():
             time.sleep(0.5)
 
     finally:
+        if adaptive_engine:
+            try:
+                adaptive_engine.stop()
+            except Exception:
+                pass
         try:
             telem.close()
         except Exception:

@@ -1,4 +1,7 @@
 openai
 hidapi
 pyserial
-
+fastapi
+uvicorn[standard]
+scikit-learn
+joblib
