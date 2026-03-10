@@ -24,6 +24,15 @@ This repository includes a small AI operator for the DALI lamp controller.
 ```bash
 python -m dalicontrol.main              # interactive loop
 python -m dalicontrol.main --dry-run    # log actions without touching hardware
+# CLI only (backward compatible)
+python -m dalicontrol.main --sensor-port /dev/ttyUSB0 --auto --mode baseline
+
+# With web dashboard
+python -m dalicontrol.main --sensor-port /dev/ttyUSB0 --web --web-port 8080 --mode ai
+
+# Dry run for testing
+python -m dalicontrol.main --dry-run --sensor-port /dev/null --web
+
 ```
 
 Type natural language commands such as:
