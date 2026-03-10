@@ -1,0 +1,596 @@
+/*
+ * KoL Desk Sensor — ESP32 + LD2410 + BH1750
+ * Upgraded firmware for reliability and richer telemetry.
+ *
+ * Changes from original:
+ *   1. Hardware watchdog (8s) prevents silent hangs
+ *   2. Robust BH1750 recovery with full I2C bus reset
+ *   3. ACK parsing validates actual LD2410 response frames
+ *   4. Richer JSON: distance, signal, uptime, boot reason
+ *   5. Heartbeat counter so Python detects frozen output
+ *   6. Serial command channel (Python → ESP32) for runtime reconfig
+ *   7. Non-blocking architecture — no delay() in loop
+ *   8. Lux exponential moving average to smooth flicker
+ *   9. Configurable output rate via serial command
+ *  10. Retry logic on radar configuration at boot
+ *  11. Signal-strength + distance gating to reject PC fans/RGB/passersby
+ *  12. Confirmation-window filter: requires N of M readings to flip state
+ */
+#include <Arduino.h>
+#include <Wire.h>
+#include <BH1750.h>
+#include <esp_task_wdt.h>
+#include "MyLD2410.h"
+
+// ======================= Pin & Baud Config =======================
+
+static const uint32_t PC_BAUD       = 115200;
+static const int      I2C_SDA       = 26;
+static const int      I2C_SCL       = 32;
+static const int      RX_PIN        = 33;   // ESP32 RX ← LD2410 TX
+static const int      TX_PIN        = 27;   // ESP32 TX → LD2410 RX
+static const uint32_t LD2410_BAUD   = 256000;
+
+// ======================= Radar Gate Calibration ==================
+//
+// RELIABILITY NOTES — Why the original config caused false triggers:
+//
+//   Problem 1: Stationary sensitivity = 0 at G0/G1
+//     Sensitivity 0 = "detect the faintest signal". PC fans, RGB LEDs,
+//     and even warm air currents produce tiny radar reflections that
+//     register as a stationary target. Fix: raise to 40 so only a
+//     real human torso/head (strong reflector) triggers detection.
+//
+//   Problem 2: MAX_MOVING_GATE = 3 in an open office
+//     Gate 3 = 1.5–2.25 m. In an open office, people walking through
+//     adjacent aisles constantly trigger moving detection. Fix: reduce
+//     to gate 2 (~1.5 m) so only someone approaching YOUR desk counts.
+//
+//   Problem 3: No signal strength filtering
+//     The LD2410 reports HOW STRONG each detection is (0–100). A person
+//     at the desk reads 40–90. A PC fan reads 5–15. The original code
+//     ignored this entirely. Fix: require minimum signal strength.
+//
+
+static const uint8_t  MAX_MOVING_GATE     = 2;   // ~1.50 m (was 3)
+static const uint8_t  MAX_STATIONARY_GATE = 2;   // ~1.50 m (unchanged)
+static const uint16_t NO_ONE_DELAY_S      = 5;
+
+struct GateSens { uint8_t m; uint8_t s; };
+static const GateSens SENS[9] = {
+  // Lower value = MORE sensitive. 0 = max, 100 = off.
+  //
+  // G0 (0–0.75m): This is where the PC sits. Stationary raised from
+  //   0→40 to reject fans/RGB. Moving stays sensitive for hand waves.
+  { 30, 40 },   // G0: desk immediate — reject fan noise on stationary
+  { 30, 40 },   // G1: desk zone 0.75–1.5m — same treatment
+  { 50, 50 },   // G2: edge of desk ~1.5m — moderate sensitivity
+  {100,100 },   // G3–G8: completely off — open office noise rejection
+  {100,100 },
+  {100,100 },
+  {100,100 },
+  {100,100 },
+  {100,100 },
+};
+
+// ======================= Signal Strength Gating ==================
+//
+// The LD2410 reports signal strength 0–100 for each target type.
+// A seated human typically reads 30–90. PC fans/RGB read 5–20.
+// These thresholds reject weak signals that pass the gate sensitivity.
+//
+static const uint8_t MIN_MOVING_SIGNAL    = 15;   // reject fan-like flickers
+static const uint8_t MIN_STATIONARY_SIGNAL = 20;  // reject PC/RGB reflections
+
+// Maximum distance in cm to consider. Anything beyond = ignore.
+// Desk scenario: person is within ~120 cm of sensor.
+static const uint16_t MAX_DETECT_DISTANCE_CM = 150;
+
+// ======================= Occupancy Filter Params =================
+//
+// Two-stage filter:
+//   Stage 1: "Confirmation window" — of the last N radar reads, at
+//            least M must agree before we flip raw state. This kills
+//            single-frame glitches from the radar.
+//   Stage 2: "Debounce timer" — raw state must be stable for ON_DELAY
+//            or OFF_DELAY before the filtered output changes.
+//
+static const uint32_t ON_DELAY_MS   = 800;    // slightly slower on (was 600)
+static const uint32_t OFF_DELAY_MS  = 8000;   // slightly longer hold (was 6000)
+
+// Confirmation window: require CONFIRM_THRESHOLD out of CONFIRM_WINDOW
+// consecutive readings to agree before changing raw state.
+static const uint8_t CONFIRM_WINDOW    = 5;    // look at last 5 readings
+static const uint8_t CONFIRM_ON_THRESH = 3;    // 3 of 5 must say "present" to go ON
+static const uint8_t CONFIRM_OFF_THRESH = 5;   // all 5 must say "absent" to go OFF (conservative)
+
+// ======================= Lux Smoothing ===========================
+
+static const float LUX_EMA_ALPHA = 0.3;   // 0..1; lower = smoother
+
+// ======================= Watchdog ================================
+
+static const uint8_t WDT_TIMEOUT_S = 8;
+
+// ======================= LD2410 Hex Protocol =====================
+
+static const uint8_t  HDR[4]  = {0xFD, 0xFC, 0xFB, 0xFA};
+static const uint8_t  TAIL[4] = {0x04, 0x03, 0x02, 0x01};
+static const uint16_t CMD_ENTER_CFG   = 0x00FF;
+static const uint16_t CMD_EXIT_CFG    = 0x00FE;
+static const uint16_t CMD_SET_MAXGATE = 0x0060;
+static const uint16_t CMD_SET_SENS    = 0x0064;
+
+// ======================= Global Objects ==========================
+
+BH1750          lightMeter;
+HardwareSerial& sensorSerial = Serial2;
+MyLD2410        sensor(sensorSerial);
+
+// ======================= Runtime State ===========================
+
+// Confirmation window ring buffer
+bool     confirmBuf[5]     = {false};  // sized to CONFIRM_WINDOW
+uint8_t  confirmIdx        = 0;
+bool     confirmedRaw      = false;    // output of confirmation filter
+
+// Debounce filter (stage 2)
+bool     rawOccLast        = false;
+bool     occupiedFiltered  = false;
+uint32_t rawChangedAt      = 0;
+
+// Lux
+float    currentLux        = -1.0;
+float    smoothedLux       = -1.0;
+bool     luxSensorOk       = false;
+uint8_t  luxFailCount      = 0;
+static const uint8_t LUX_FAIL_RESET_THRESHOLD = 5;
+
+// Output
+uint32_t outputIntervalMs  = 1000;   // default 1 Hz, changeable via serial cmd
+uint32_t heartbeat         = 0;
+
+// Uptime
+uint32_t bootTimeMs        = 0;
+
+// ======================= Forward Declarations ====================
+
+void    resetI2CBus();
+bool    initBH1750();
+bool    configureRadar();
+void    sendFrame(uint16_t cmd, const uint8_t* data, uint16_t dataLen);
+bool    readAck(uint32_t timeoutMs = 500);
+bool    enterConfig();
+bool    exitConfig();
+bool    setMaxGates(uint8_t maxMove, uint8_t maxStill);
+bool    setGateSensitivity(uint8_t gate, uint8_t movThr, uint8_t staThr);
+bool    instantOccupancy();
+bool    confirmationFilter(bool instant);
+void    updateDebounce(bool confirmed);
+void    handleSerialCommand(const String& line);
+void    outputJSON();
+
+// ======================= I2C / BH1750 ============================
+
+void resetI2CBus() {
+  Wire.end();
+  // Toggle SCL manually to clear stuck slaves
+  pinMode(I2C_SCL, OUTPUT);
+  for (int i = 0; i < 16; i++) {
+    digitalWrite(I2C_SCL, HIGH); delayMicroseconds(5);
+    digitalWrite(I2C_SCL, LOW);  delayMicroseconds(5);
+  }
+  digitalWrite(I2C_SCL, HIGH);
+  delayMicroseconds(10);
+  Wire.begin(I2C_SDA, I2C_SCL);
+}
+
+bool initBH1750() {
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  // Try auto-detect first
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+    luxSensorOk = true;
+    luxFailCount = 0;
+    return true;
+  }
+
+  // Force manual config (known workaround for some clones)
+  bool ok = lightMeter.configure(BH1750::CONTINUOUS_HIGH_RES_MODE);
+  luxSensorOk = ok;
+  luxFailCount = 0;
+  return ok;
+}
+
+void readLux() {
+  float val = lightMeter.readLightLevel();
+  if (val >= 0) {
+    currentLux   = val;
+    luxFailCount = 0;
+    luxSensorOk  = true;
+
+    // Exponential moving average
+    if (smoothedLux < 0) {
+      smoothedLux = val;   // first valid reading
+    } else {
+      smoothedLux = LUX_EMA_ALPHA * val + (1.0 - LUX_EMA_ALPHA) * smoothedLux;
+    }
+  } else {
+    luxFailCount++;
+    if (luxFailCount >= LUX_FAIL_RESET_THRESHOLD) {
+      // Full bus reset + re-init
+      Serial.println("{\"warn\":\"BH1750_RESET\"}");
+      resetI2CBus();
+      initBH1750();
+    } else {
+      // Soft retry
+      lightMeter.configure(BH1750::CONTINUOUS_HIGH_RES_MODE);
+    }
+  }
+}
+
+// ======================= LD2410 Hex Helpers ======================
+
+void sendFrame(uint16_t cmd, const uint8_t* data, uint16_t dataLen) {
+  uint16_t payloadLen = 2 + dataLen;
+  sensorSerial.write(HDR, 4);
+  sensorSerial.write((uint8_t)(payloadLen & 0xFF));
+  sensorSerial.write((uint8_t)((payloadLen >> 8) & 0xFF));
+  sensorSerial.write((uint8_t)(cmd & 0xFF));
+  sensorSerial.write((uint8_t)((cmd >> 8) & 0xFF));
+  if (dataLen && data) sensorSerial.write(data, dataLen);
+  sensorSerial.write(TAIL, 4);
+  sensorSerial.flush();
+}
+
+bool readAck(uint32_t timeoutMs) {
+  uint8_t buf[64];
+  uint16_t idx = 0;
+  uint32_t start = millis();
+
+  while (millis() - start < timeoutMs) {
+    while (sensorSerial.available() && idx < sizeof(buf)) {
+      buf[idx++] = sensorSerial.read();
+    }
+
+    if (idx >= 10) {
+      for (uint16_t i = 0; i <= idx - 4; i++) {
+        if (buf[i] == 0xFD && buf[i+1] == 0xFC && buf[i+2] == 0xFB && buf[i+3] == 0xFA) {
+          if (i + 6 <= idx) {
+            uint16_t pLen = buf[i+4] | (buf[i+5] << 8);
+            uint16_t frameEnd = i + 6 + pLen + 4;
+            if (frameEnd <= idx) {
+              if (pLen >= 4) {
+                uint16_t status = buf[i+8] | (buf[i+9] << 8);
+                while (sensorSerial.available()) sensorSerial.read();
+                return (status == 0x0000);
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
+    delay(5);
+  }
+
+  while (sensorSerial.available()) sensorSerial.read();
+  return false;
+}
+
+bool enterConfig() {
+  uint8_t d[2] = {0x01, 0x00};
+  sendFrame(CMD_ENTER_CFG, d, 2);
+  return readAck(500);
+}
+
+bool exitConfig() {
+  sendFrame(CMD_EXIT_CFG, nullptr, 0);
+  return readAck(500);
+}
+
+bool setMaxGates(uint8_t maxMove, uint8_t maxStill) {
+  uint8_t d[18] = {0};
+  d[0] = 0x00; d[1] = 0x00;
+  d[2] = maxMove; d[3] = 0x00; d[4] = 0x00; d[5] = 0x00;
+  d[6] = 0x01; d[7] = 0x00;
+  d[8] = maxStill; d[9] = 0x00; d[10]= 0x00; d[11]= 0x00;
+  d[12]= 0x02; d[13]= 0x00;
+  d[14]= (uint8_t)(NO_ONE_DELAY_S & 0xFF);
+  d[15]= (uint8_t)((NO_ONE_DELAY_S >> 8) & 0xFF);
+  d[16]= 0x00; d[17]= 0x00;
+  sendFrame(CMD_SET_MAXGATE, d, 18);
+  return readAck(500);
+}
+
+bool setGateSensitivity(uint8_t gate, uint8_t movThr, uint8_t staThr) {
+  uint8_t d[18] = {0};
+  d[0] = 0x00; d[1] = 0x00;
+  d[2] = gate; d[3] = 0x00; d[4] = 0x00; d[5] = 0x00;
+  d[6] = 0x01; d[7] = 0x00;
+  d[8] = movThr; d[9] = 0x00; d[10]= 0x00; d[11]= 0x00;
+  d[12]= 0x02; d[13]= 0x00;
+  d[14]= staThr; d[15]= 0x00; d[16]= 0x00; d[17]= 0x00;
+  sendFrame(CMD_SET_SENS, d, 18);
+  return readAck(500);
+}
+
+bool configureRadar() {
+  if (!enterConfig()) return false;
+
+  bool ok = setMaxGates(MAX_MOVING_GATE, MAX_STATIONARY_GATE);
+
+  for (uint8_t g = 0; g < 9 && ok; g++) {
+    ok &= setGateSensitivity(g, SENS[g].m, SENS[g].s);
+  }
+
+  ok &= exitConfig();
+  return ok;
+}
+
+// ======================= Occupancy Logic =========================
+//
+// Three layers of filtering, each targeting a different failure mode:
+//
+//  Layer 1 — instantOccupancy():
+//    Gate sensitivity + signal strength + distance check.
+//    Rejects: PC fans (weak signal), RGB reflections (weak signal),
+//    people in adjacent aisles (too far).
+//
+//  Layer 2 — confirmationFilter():
+//    Ring buffer of last N instant readings. Requires majority to
+//    agree before flipping. Rejects: single-frame radar glitches.
+//
+//  Layer 3 — updateDebounce():
+//    Time-based debounce (ON_DELAY / OFF_DELAY).
+//    Rejects: brief walk-bys, momentary hand waves into range.
+//
+
+bool instantOccupancy() {
+  // Check moving target: must have sufficient signal AND be within range
+  bool movingOk = false;
+  if (sensor.movingTargetDetected()) {
+    uint8_t  sig  = sensor.movingTargetSignal();
+    uint16_t dist = sensor.movingTargetDistance();
+    if (sig >= MIN_MOVING_SIGNAL && dist <= MAX_DETECT_DISTANCE_CM) {
+      movingOk = true;
+    }
+  }
+
+  // Check stationary target: same treatment
+  bool stationaryOk = false;
+  if (sensor.stationaryTargetDetected()) {
+    uint8_t  sig  = sensor.stationaryTargetSignal();
+    uint16_t dist = sensor.stationaryTargetDistance();
+    if (sig >= MIN_STATIONARY_SIGNAL && dist <= MAX_DETECT_DISTANCE_CM) {
+      stationaryOk = true;
+    }
+  }
+
+  return movingOk || stationaryOk;
+}
+
+bool confirmationFilter(bool instant) {
+  // Push into ring buffer
+  confirmBuf[confirmIdx] = instant;
+  confirmIdx = (confirmIdx + 1) % CONFIRM_WINDOW;
+
+  // Count how many of the last CONFIRM_WINDOW readings said "present"
+  uint8_t presentCount = 0;
+  for (uint8_t i = 0; i < CONFIRM_WINDOW; i++) {
+    if (confirmBuf[i]) presentCount++;
+  }
+
+  // Asymmetric thresholds: easier to stay on than to turn on
+  if (!confirmedRaw && presentCount >= CONFIRM_ON_THRESH) {
+    confirmedRaw = true;
+  } else if (confirmedRaw && presentCount <= (CONFIRM_WINDOW - CONFIRM_OFF_THRESH)) {
+    confirmedRaw = false;
+  }
+
+  return confirmedRaw;
+}
+
+void updateDebounce(bool confirmed) {
+  if (confirmed != rawOccLast) {
+    rawOccLast   = confirmed;
+    rawChangedAt = millis();
+  }
+
+  uint32_t stableFor = millis() - rawChangedAt;
+
+  if (!occupiedFiltered && confirmed && stableFor >= ON_DELAY_MS) {
+    occupiedFiltered = true;
+  }
+  if (occupiedFiltered && !confirmed && stableFor >= OFF_DELAY_MS) {
+    occupiedFiltered = false;
+  }
+}
+
+// ======================= Serial Command Input ====================
+
+static String cmdBuffer = "";
+
+void checkSerialCommands() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      cmdBuffer.trim();
+      if (cmdBuffer.length() > 0) {
+        handleSerialCommand(cmdBuffer);
+      }
+      cmdBuffer = "";
+    } else if (cmdBuffer.length() < 128) {
+      cmdBuffer += c;
+    }
+  }
+}
+
+void handleSerialCommand(const String& line) {
+  if (line.indexOf("\"ping\"") >= 0) {
+    Serial.println("{\"ack\":\"pong\"}");
+
+  } else if (line.indexOf("\"set_rate\"") >= 0) {
+    int hzIdx = line.indexOf("\"hz\":");
+    if (hzIdx >= 0) {
+      int hz = line.substring(hzIdx + 5).toInt();
+      if (hz >= 1 && hz <= 10) {
+        outputIntervalMs = 1000 / hz;
+        Serial.print("{\"ack\":\"rate_set\",\"hz\":");
+        Serial.print(hz);
+        Serial.println("}");
+      }
+    }
+
+  } else if (line.indexOf("\"reconfig_radar\"") >= 0) {
+    bool ok = configureRadar();
+    Serial.print("{\"ack\":\"reconfig_radar\",\"ok\":");
+    Serial.print(ok ? "true" : "false");
+    Serial.println("}");
+
+  } else if (line.indexOf("\"reset_lux\"") >= 0) {
+    resetI2CBus();
+    bool ok = initBH1750();
+    Serial.print("{\"ack\":\"reset_lux\",\"ok\":");
+    Serial.print(ok ? "true" : "false");
+    Serial.println("}");
+
+  } else if (line.indexOf("\"status\"") >= 0) {
+    Serial.print("{\"ack\":\"status\",\"uptime_s\":");
+    Serial.print((millis() - bootTimeMs) / 1000);
+    Serial.print(",\"lux_ok\":");
+    Serial.print(luxSensorOk ? "true" : "false");
+    Serial.print(",\"heartbeat\":");
+    Serial.print(heartbeat);
+    Serial.print(",\"output_hz\":");
+    Serial.print(1000 / outputIntervalMs);
+    Serial.println("}");
+  }
+}
+
+// ======================= JSON Output =============================
+// NOTE: JSON field names are IDENTICAL to the previous version.
+// Python usb_occupancy.py parses: raw, occupied, moving, stationary, lux
+// The extra fields (lux_smooth, move_dist, etc.) are ignored by Python
+// unless explicitly read — safe to add, never safe to rename/remove.
+
+void outputJSON() {
+  heartbeat++;
+
+  uint16_t moveDist  = sensor.movingTargetDistance();
+  uint8_t  moveEnrg  = sensor.movingTargetSignal();
+  uint16_t stillDist = sensor.stationaryTargetDistance();
+  uint8_t  stillEnrg = sensor.stationaryTargetSignal();
+
+  Serial.print("{");
+  Serial.print("\"raw\":");        Serial.print(rawOccLast ? "true" : "false");
+  Serial.print(",\"occupied\":");  Serial.print(occupiedFiltered ? "true" : "false");
+  Serial.print(",\"moving\":");    Serial.print(sensor.movingTargetDetected() ? "true" : "false");
+  Serial.print(",\"stationary\":"); Serial.print(sensor.stationaryTargetDetected() ? "true" : "false");
+  Serial.print(",\"lux\":");       Serial.print(currentLux, 1);
+  Serial.print(",\"lux_smooth\":"); Serial.print(smoothedLux >= 0 ? smoothedLux : currentLux, 1);
+  Serial.print(",\"lux_ok\":");    Serial.print(luxSensorOk ? "true" : "false");
+
+  // Radar detail
+  Serial.print(",\"move_dist\":");  Serial.print(moveDist);
+  Serial.print(",\"move_energy\":"); Serial.print(moveEnrg);
+  Serial.print(",\"still_dist\":"); Serial.print(stillDist);
+  Serial.print(",\"still_energy\":"); Serial.print(stillEnrg);
+
+  // Diagnostics
+  Serial.print(",\"uptime_s\":");  Serial.print((millis() - bootTimeMs) / 1000);
+  Serial.print(",\"seq\":");       Serial.print(heartbeat);
+
+  Serial.println("}");
+}
+
+// ======================= Setup ===================================
+
+void setup() {
+  bootTimeMs = millis();
+  Serial.begin(PC_BAUD);
+  delay(200);
+
+  // --- Watchdog ---
+  const esp_task_wdt_config_t wdt_cfg = {
+    .timeout_ms       = WDT_TIMEOUT_S * 1000,
+    .idle_core_mask   = 0,
+    .trigger_panic    = true,
+  };
+  esp_task_wdt_init(&wdt_cfg);
+  esp_task_wdt_add(NULL);
+
+  Serial.println("{\"status\":\"BOOT_START\"}");
+
+  esp_reset_reason_t reason = esp_reset_reason();
+  Serial.print("{\"boot_reason\":");
+  Serial.print((int)reason);
+  Serial.println("}");
+
+  // --- BH1750 ---
+  bool bhOk = initBH1750();
+  Serial.print("{\"bh1750\":\"");
+  Serial.print(bhOk ? "OK" : "FAIL");
+  Serial.println("\"}");
+
+  // --- LD2410 ---
+  sensorSerial.begin(LD2410_BAUD, SERIAL_8N1, RX_PIN, TX_PIN);
+  delay(300);
+
+  bool radarOk = false;
+  for (int attempt = 0; attempt < 3 && !radarOk; attempt++) {
+    radarOk = configureRadar();
+    if (!radarOk) {
+      Serial.print("{\"warn\":\"radar_config_retry\",\"attempt\":");
+      Serial.print(attempt + 1);
+      Serial.println("}");
+      delay(500);
+    }
+  }
+
+  Serial.print("{\"radar\":\"");
+  Serial.print(radarOk ? "OK" : "FAIL");
+  Serial.println("\"}");
+
+  sensor.begin();
+  sensor.enhancedMode(true);
+
+  // Initialize confirmation buffer to "vacant"
+  for (uint8_t i = 0; i < CONFIRM_WINDOW; i++) {
+    confirmBuf[i] = false;
+  }
+
+  Serial.println("{\"status\":\"BOOT_COMPLETE\"}");
+}
+
+// ======================= Loop ====================================
+
+void loop() {
+  esp_task_wdt_reset();
+
+  // 1. Radar: non-blocking parse
+  sensor.check();
+
+  // 2. Three-layer occupancy filter
+  bool instant   = instantOccupancy();          // Layer 1: signal + distance
+  bool confirmed = confirmationFilter(instant);  // Layer 2: N-of-M window
+  updateDebounce(confirmed);                     // Layer 3: time debounce
+
+  // 3. Lux: read every 1 s
+  static uint32_t lastLuxTime = 0;
+  uint32_t now = millis();
+  if (now - lastLuxTime >= 1000) {
+    readLux();
+    lastLuxTime = now;
+  }
+
+  // 4. Serial commands from Python
+  checkSerialCommands();
+
+  // 5. JSON output at configured rate
+  static uint32_t lastOutputTime = 0;
+  if (now - lastOutputTime >= outputIntervalMs) {
+    outputJSON();
+    lastOutputTime = now;
+  }
+}
