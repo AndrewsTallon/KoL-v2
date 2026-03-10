@@ -37,9 +37,17 @@ class TelemetryLogger:
         "moving",
         "stationary",
         "lux",
+        "lux_smooth",
         "moving_age_ms",
         "moving_events",
         "sensor_age_s",
+        "move_dist",
+        "move_energy",
+        "still_dist",
+        "still_energy",
+        "sensor_seq",
+        "confirm_count",
+        "filter_stage",
         "lamp_is_off",
         "lamp_level",
         "lamp_temp_dtr",
@@ -48,6 +56,7 @@ class TelemetryLogger:
         "runtime_s",
         "action",
         "reason",
+        "rationale",
         "user_text",
     ]
 
@@ -92,6 +101,7 @@ def build_row(
     runtime_tracker: dict,
     action: str = "",
     reason: str = "",
+    rationale: str = "",
     user_text: str = "",
 ) -> dict:
     now_epoch = time.time()
@@ -109,9 +119,17 @@ def build_row(
         "moving": getattr(snap, "moving", None),
         "stationary": getattr(snap, "stationary", None),
         "lux": getattr(snap, "lux", None),
+        "lux_smooth": getattr(snap, "lux_smooth", None),
         "moving_age_ms": getattr(snap, "moving_age_ms", None),
         "moving_events": getattr(snap, "moving_events", None),
         "sensor_age_s": round(sensor_age_s, 3),
+        "move_dist": getattr(snap, "move_dist", None),
+        "move_energy": getattr(snap, "move_energy", None),
+        "still_dist": getattr(snap, "still_dist", None),
+        "still_energy": getattr(snap, "still_energy", None),
+        "sensor_seq": getattr(snap, "sensor_seq", None),
+        "confirm_count": getattr(snap, "confirm_count", None),
+        "filter_stage": getattr(snap, "filter_stage", None),
         "lamp_is_off": lamp.state.is_off,
         "lamp_level": lamp.state.last_level,
         "lamp_temp_dtr": temp_dtr,
@@ -120,8 +138,34 @@ def build_row(
         "runtime_s": round(runtime_tracker.get("total_s", 0), 1),
         "action": action,
         "reason": reason,
+        "rationale": rationale,
         "user_text": user_text,
     }
+
+
+# ---------------- Decision Log ----------------
+
+# In-memory ring buffer for recent decisions (shared with web UI)
+_recent_decisions: list = []
+_decisions_lock = threading.Lock()
+
+
+def record_decision(action: str, reason: str, rationale: str, snap, mode: str):
+    """Record a system decision for display in the web UI and telemetry."""
+    entry = {
+        "ts": time.time(),
+        "ts_iso": datetime.now().isoformat(timespec="seconds"),
+        "action": action,
+        "reason": reason,
+        "rationale": rationale,
+        "lux": getattr(snap, "lux", None),
+        "occupied": getattr(snap, "filt_occupied", None),
+        "mode": mode,
+    }
+    with _decisions_lock:
+        _recent_decisions.append(entry)
+        if len(_recent_decisions) > 100:
+            del _recent_decisions[:-100]
 
 
 # ---------------- Main ----------------
@@ -199,6 +243,8 @@ def main():
             "auto": args.auto,
             "nominal_power_watts": args.nominal_power,
             "runtime_tracker": runtime_tracker,
+            "recent_decisions": _recent_decisions,
+            "decisions_lock": _decisions_lock,
         }
 
         # ---- Adaptive engine (for AI mode) ----
@@ -213,13 +259,19 @@ def main():
             if not adaptive_engine.load_models():
                 adaptive_engine.train_from_baseline()
 
-            def on_adaptive_action(action_str, reason_str):
+            def on_adaptive_action(action_str, reason_str, rationale_str=""):
                 snap = reader.snapshot()
                 telem.log_row(build_row(
                     mode=app_state["mode"], snap=snap, lamp=lamp,
                     runtime_tracker=runtime_tracker,
                     action=action_str, reason=reason_str,
+                    rationale=rationale_str,
                 ))
+                record_decision(
+                    action=action_str, reason=reason_str,
+                    rationale=rationale_str, snap=snap,
+                    mode=app_state["mode"],
+                )
 
             adaptive_engine.on_action = on_adaptive_action
             adaptive_engine.start(reader)
@@ -270,6 +322,7 @@ def main():
                     if filt:
                         if (not last_filt) or (vacant_start is not None):
                             logging.info("AUTO: OCCUPIED -> Restoring light")
+                            rationale = "Person detected at desk -> restoring light to 75%"
                             with lamp_lock:
                                 lamp.set_brightness_pct(75)
                                 save_state(lamp.state)
@@ -282,8 +335,16 @@ def main():
                                         runtime_tracker=runtime_tracker,
                                         action="set_brightness_pct(75)",
                                         reason="auto_occupied_restore",
+                                        rationale=rationale,
                                     )
                                 )
+                            record_decision(
+                                action="set_brightness_pct(75)",
+                                reason="auto_occupied_restore",
+                                rationale=rationale,
+                                snap=snap,
+                                mode=app_state["mode"],
+                            )
 
                         vacant_start = None
                         last_filt = True
@@ -294,6 +355,7 @@ def main():
                             logging.info(f"AUTO: VACANT -> Dimming to {DIM_LEVEL}% for {DIM_DELAY}s")
                             vacant_start = time.time()
                             last_filt = False
+                            rationale = f"Desk vacant -> dimming to {DIM_LEVEL}% as warning before shutdown"
                             with lamp_lock:
                                 lamp.set_brightness_pct(DIM_LEVEL)
 
@@ -305,11 +367,20 @@ def main():
                                         runtime_tracker=runtime_tracker,
                                         action=f"set_brightness_pct({DIM_LEVEL})",
                                         reason="auto_vacant_dim",
+                                        rationale=rationale,
                                     )
                                 )
+                            record_decision(
+                                action=f"set_brightness_pct({DIM_LEVEL})",
+                                reason="auto_vacant_dim",
+                                rationale=rationale,
+                                snap=snap,
+                                mode=app_state["mode"],
+                            )
 
                         if vacant_start and (time.time() - vacant_start > DIM_DELAY):
                             logging.info("AUTO: VACANT Timer expired -> Turning OFF")
+                            rationale = "Vacant for 60s after dimming -> turning off to save energy"
                             with lamp_lock:
                                 lamp.off()
                                 save_state(lamp.state)
@@ -322,8 +393,16 @@ def main():
                                         runtime_tracker=runtime_tracker,
                                         action="off()",
                                         reason="auto_vacant_off",
+                                        rationale=rationale,
                                     )
                                 )
+                            record_decision(
+                                action="off()",
+                                reason="auto_vacant_off",
+                                rationale=rationale,
+                                snap=snap,
+                                mode=app_state["mode"],
+                            )
 
                             vacant_start = None
 
