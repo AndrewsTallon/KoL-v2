@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KoL Lighting Control</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <h1>KoL Lighting Control</h1>
+    <div class="header-controls">
+      <div class="mode-select">
+        <label>Mode:</label>
+        <select id="modeSelect">
+          <option value="baseline">Baseline</option>
+          <option value="ai">AI Adaptive</option>
+        </select>
+      </div>
+      <div class="auto-toggle">
+        <label>
+          <input type="checkbox" id="autoToggle"> Auto Occupancy
+        </label>
+      </div>
+      <span id="connStatus" class="conn-status disconnected">Disconnected</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Top row: Status + Controls -->
+    <div class="top-row">
+
+      <!-- Live Status Panel -->
+      <section class="panel status-panel">
+        <h2>Live Status</h2>
+
+        <div class="status-grid">
+          <div class="status-card">
+            <h3>Lamp</h3>
+            <div class="lamp-status">
+              <span id="lampBadge" class="badge off">OFF</span>
+              <div class="stat-row">
+                <span class="label">Brightness</span>
+                <span id="lampBrightness" class="value">--</span><span class="unit">%</span>
+              </div>
+              <div class="stat-row">
+                <span class="label">CCT</span>
+                <span id="lampCCT" class="value">--</span><span class="unit">K</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-card">
+            <h3>Sensor</h3>
+            <div class="sensor-status">
+              <span id="occupancyBadge" class="badge vacant">VACANT</span>
+              <div class="stat-row">
+                <span class="label">Lux</span>
+                <span id="sensorLux" class="value">--</span><span class="unit">lx</span>
+              </div>
+              <div class="stat-row">
+                <span class="label">Motion</span>
+                <span id="sensorMotion" class="value">--</span>
+              </div>
+              <div class="stat-row">
+                <span class="label">Sensor Age</span>
+                <span id="sensorAge" class="value">--</span><span class="unit">s</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-card">
+            <h3>Statistics</h3>
+            <div class="stat-row">
+              <span class="label">Runtime</span>
+              <span id="statRuntime" class="value">--</span>
+            </div>
+            <div class="stat-row">
+              <span class="label">Energy Est.</span>
+              <span id="statEnergy" class="value">--</span><span class="unit">Wh</span>
+            </div>
+            <div class="stat-row">
+              <span class="label">Mode</span>
+              <span id="statMode" class="value">--</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Manual Control Panel -->
+      <section class="panel control-panel">
+        <h2>Manual Control</h2>
+
+        <div class="control-group">
+          <label for="brightnessSlider">Brightness: <span id="brightnessVal">50</span>%</label>
+          <input type="range" id="brightnessSlider" min="0" max="100" value="50">
+          <button id="brightnessBtn" class="btn">Apply</button>
+        </div>
+
+        <div class="control-group">
+          <label for="cctSlider">CCT: <span id="cctVal">4000</span>K</label>
+          <div class="cct-bar">
+            <span class="warm-label">Warm</span>
+            <input type="range" id="cctSlider" min="2700" max="6500" value="4000" step="100">
+            <span class="cool-label">Cool</span>
+          </div>
+          <button id="cctBtn" class="btn">Apply</button>
+        </div>
+
+        <div class="control-group power-buttons">
+          <button id="onBtn" class="btn btn-on">ON</button>
+          <button id="offBtn" class="btn btn-off">OFF</button>
+        </div>
+
+        <div class="control-group">
+          <label for="powerInput">Nominal Power (W):</label>
+          <div class="inline-control">
+            <input type="number" id="powerInput" value="40" min="1" max="500" step="1">
+            <button id="powerBtn" class="btn btn-sm">Set</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Charts Section -->
+    <section class="panel charts-panel">
+      <div class="chart-header">
+        <h2>Telemetry</h2>
+        <div class="chart-controls">
+          <select id="chartWindow">
+            <option value="60">Last 1h</option>
+            <option value="240">Last 4h</option>
+            <option value="480" selected>Last 8h</option>
+          </select>
+          <select id="runSelect">
+            <option value="live">Live Data</option>
+          </select>
+          <button id="downloadBtn" class="btn btn-sm">Download CSV</button>
+        </div>
+      </div>
+
+      <div class="charts-grid">
+        <div class="chart-container">
+          <canvas id="brightnessLuxChart"></canvas>
+        </div>
+        <div class="chart-container">
+          <canvas id="cctChart"></canvas>
+        </div>
+        <div class="chart-container full-width">
+          <canvas id="occupancyChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- AI Controls (only visible in AI mode) -->
+    <section class="panel ai-panel" id="aiPanel" style="display:none;">
+      <h2>AI Adaptive Control</h2>
+      <button id="trainBtn" class="btn">Train Models from Baseline</button>
+      <span id="trainStatus"></span>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

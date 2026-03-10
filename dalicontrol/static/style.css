@@ -1,0 +1,280 @@
+/* KoL Lighting Control Dashboard */
+
+:root {
+  --bg: #1a1a2e;
+  --panel: #16213e;
+  --card: #0f3460;
+  --accent: #e94560;
+  --text: #eee;
+  --text-dim: #999;
+  --warm: #ffa726;
+  --cool: #42a5f5;
+  --green: #66bb6a;
+  --red: #ef5350;
+  --border: #2a2a4a;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+/* Header */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.mode-select select,
+.chart-controls select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.auto-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.conn-status {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.conn-status.connected { background: var(--green); color: #000; }
+.conn-status.disconnected { background: var(--red); color: #fff; }
+
+/* Main Layout */
+main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.top-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+}
+
+/* Panels */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.panel h2 {
+  font-size: 1rem;
+  margin-bottom: 12px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Status Grid */
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.status-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.status-card h3 {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.stat-row .label { color: var(--text-dim); font-size: 0.85rem; }
+.stat-row .value { font-weight: 600; font-size: 1.1rem; }
+.stat-row .unit { color: var(--text-dim); font-size: 0.8rem; margin-left: 2px; }
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.badge.on { background: var(--green); color: #000; }
+.badge.off { background: var(--red); color: #fff; }
+.badge.occupied { background: var(--green); color: #000; }
+.badge.vacant { background: var(--border); color: var(--text-dim); }
+
+/* Controls */
+.control-group {
+  margin-bottom: 16px;
+}
+
+.control-group label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.9rem;
+}
+
+input[type="range"] {
+  width: 100%;
+  margin: 4px 0;
+  accent-color: var(--accent);
+}
+
+.cct-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cct-bar input { flex: 1; }
+.warm-label { color: var(--warm); font-size: 0.8rem; }
+.cool-label { color: var(--cool); font-size: 0.8rem; }
+
+.btn {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 16px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+
+.btn:hover { background: var(--accent); }
+.btn-on { background: var(--green); color: #000; }
+.btn-on:hover { background: #81c784; }
+.btn-off { background: var(--red); color: #fff; }
+.btn-off:hover { background: #e57373; }
+.btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+
+.power-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.power-buttons .btn {
+  flex: 1;
+  padding: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.inline-control {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+input[type="number"] {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  width: 80px;
+}
+
+/* Charts */
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.chart-header h2 { margin-bottom: 0; }
+
+.chart-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.chart-container {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 12px;
+  height: 250px;
+}
+
+.chart-container.full-width {
+  grid-column: span 2;
+  height: 150px;
+}
+
+canvas { width: 100% !important; height: 100% !important; }
+
+/* AI Panel */
+.ai-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ai-panel h2 { margin-bottom: 0; }
+
+#trainStatus {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .top-row { grid-template-columns: 1fr; }
+  .status-grid { grid-template-columns: 1fr; }
+  .charts-grid { grid-template-columns: 1fr; }
+  .chart-container.full-width { grid-column: span 1; }
+}
