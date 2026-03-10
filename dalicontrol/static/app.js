@@ -255,6 +255,15 @@ function updateDashboard(data) {
   // AI panel visibility
   document.getElementById('aiPanel').style.display =
     data.mode === 'ai' ? 'flex' : 'none';
+
+  // Latest decision
+  if (data.last_decision && data.last_decision.rationale) {
+    const ld = data.last_decision;
+    const latestEl = document.getElementById('latestDecision');
+    const timeStr = ld.ts_iso ? ld.ts_iso.substring(11) : new Date(ld.ts * 1000).toLocaleTimeString();
+    latestEl.querySelector('.decision-time').textContent = timeStr + ' · ' + (ld.mode || '').toUpperCase();
+    latestEl.querySelector('.decision-rationale').textContent = ld.rationale;
+  }
 }
 
 function formatDuration(seconds) {
@@ -415,9 +424,54 @@ document.getElementById('runSelect').onchange = async (e) => {
   occupancyChart.update();
 };
 
+// ---- Decision Log ----
+
+async function loadDecisions() {
+  const decisions = await apiGet('/api/decisions');
+  if (!decisions || !Array.isArray(decisions)) return;
+
+  const logEl = document.getElementById('decisionLog');
+  logEl.innerHTML = '';
+
+  // Show most recent 50, newest first
+  const recent = decisions.slice(-50).reverse();
+
+  for (const d of recent) {
+    const entry = document.createElement('div');
+    entry.className = 'decision-entry';
+
+    const timeStr = d.ts_iso ? d.ts_iso.substring(11) : new Date(d.ts * 1000).toLocaleTimeString();
+
+    entry.innerHTML =
+      `<span class="de-time">${timeStr}</span>` +
+      `<span class="de-action">${escapeHtml(d.reason || '')}</span>` +
+      `<span class="de-rationale">${escapeHtml(d.rationale || d.action || '')}</span>` +
+      `<span class="de-mode">${(d.mode || '').toUpperCase()}</span>`;
+
+    logEl.appendChild(entry);
+  }
+
+  // Update latest highlight if we have decisions
+  if (recent.length > 0) {
+    const ld = recent[0];
+    const latestEl = document.getElementById('latestDecision');
+    const timeStr = ld.ts_iso ? ld.ts_iso.substring(11) : '';
+    latestEl.querySelector('.decision-time').textContent = timeStr + ' · ' + (ld.mode || '').toUpperCase();
+    latestEl.querySelector('.decision-rationale').textContent = ld.rationale || ld.action || '';
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 // ---- Init ----
 connectWS();
 loadRuns();
+loadDecisions();
+setInterval(loadDecisions, 30000);
 
 // Fetch initial status
 apiGet('/api/status').then(data => {

@@ -20,6 +20,23 @@ class OccupancyStatus:
     # BH1750 lux is a float (your ESP32 sends e.g. 375.83)
     lux: Optional[float] = None
 
+    # BH1750 smoothed lux (EMA from ESP32)
+    lux_smooth: Optional[float] = None
+    lux_ok: Optional[bool] = None
+
+    # Radar signal detail
+    move_dist: Optional[int] = None
+    move_energy: Optional[int] = None
+    still_dist: Optional[int] = None
+    still_energy: Optional[int] = None
+
+    # ESP32 heartbeat sequence counter
+    sensor_seq: Optional[int] = None
+
+    # Occupancy filter diagnostics
+    confirm_count: Optional[int] = None
+    filter_stage: Optional[str] = None
+
     # timing/diagnostics
     updated_at: float = 0.0
     last_line: str = ""
@@ -146,6 +163,15 @@ class UsbOccupancyReader:
                                     self.status.lux = float(lux_val)
                                 except Exception:
                                     pass
+
+                            # Parse extended sensor fields (additive, never break old firmware)
+                            for key in ("lux_smooth", "lux_ok", "move_dist", "move_energy",
+                                        "still_dist", "still_energy", "seq",
+                                        "confirm_count", "filter_stage"):
+                                val = data.get(key)
+                                if val is not None:
+                                    attr = "sensor_seq" if key == "seq" else key
+                                    setattr(self.status, attr, val)
 
                             self.status.last_line = text
                             self.status.updated_at = now

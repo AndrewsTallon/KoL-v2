@@ -67,7 +67,7 @@ class AdaptiveEngine:
         self._current_cct_kelvin: Optional[int] = None
 
         # Callback for telemetry logging
-        self.on_action = None  # callable(action_str, reason_str)
+        self.on_action = None  # callable(action_str, reason_str, rationale_str)
 
     def train_from_baseline(self, csv_paths: Optional[list] = None) -> bool:
         """Train ML models from baseline telemetry CSV files.
@@ -306,7 +306,8 @@ class AdaptiveEngine:
                             self.lamp.off()
                         self._turned_off_for_absence = True
                         if self.on_action:
-                            self.on_action("off()", "adaptive_absence_timeout")
+                            rationale = f"Vacant for {absence_duration:.0f}s -> turning off to save energy"
+                            self.on_action("off()", "adaptive_absence_timeout", rationale)
 
                 # --- Periodic AI evaluation (every EVAL_INTERVAL) ---
                 if occupied and (now - self._last_eval_time >= self.EVAL_INTERVAL):
@@ -324,7 +325,10 @@ class AdaptiveEngine:
         """Evaluate and apply lighting adjustments if thresholds are exceeded."""
         lux = snap.lux if snap.lux is not None else 300.0
 
-        rec_brightness, rec_cct = self.predict(lux)
+        now = datetime.now()
+        hour = now.hour + now.minute / 60.0
+
+        rec_brightness, rec_cct = self.predict(lux, hour)
 
         # Current state
         cur_brightness = level_to_pct(self.lamp.state.last_level)
@@ -335,12 +339,18 @@ class AdaptiveEngine:
         cct_delta = abs(rec_cct - cur_cct)
 
         actions = []
+        rationale_parts = []
 
         if brightness_delta >= self.BRIGHTNESS_THRESHOLD or self.lamp.state.is_off:
             with self.lamp_lock:
                 self.lamp.set_brightness_pct(rec_brightness)
             self._current_brightness_pct = rec_brightness
             actions.append(f"set_brightness_pct({rec_brightness:.0f})")
+
+            lux_desc = "bright" if lux > 300 else "moderate" if lux > 100 else "dim"
+            rationale_parts.append(
+                f"{lux_desc} ambient light ({lux:.0f} lux) -> brightness {rec_brightness:.0f}%"
+            )
             logger.info(
                 "ADAPTIVE: Brightness %.0f%% → %.0f%% (Δ=%.1f%%)",
                 cur_brightness, rec_brightness, brightness_delta,
@@ -352,9 +362,23 @@ class AdaptiveEngine:
                 self.lamp.set_temp_raw(dtr, dtr1)
             self._current_cct_kelvin = rec_cct
             actions.append(f"set_cct({rec_cct}K)")
+
+            hour_desc = (
+                "morning" if 6 <= hour < 10
+                else "midday" if 10 <= hour < 14
+                else "afternoon" if 14 <= hour < 18
+                else "evening"
+            )
+            temp_desc = "cool white" if rec_cct >= 5000 else "neutral" if rec_cct >= 3500 else "warm"
+            rationale_parts.append(f"{hour_desc} ({hour:.1f}h) -> {temp_desc} {rec_cct}K")
             logger.info(
                 "ADAPTIVE: CCT %dK → %dK (Δ=%dK)", cur_cct, rec_cct, cct_delta
             )
 
+        if reason == "presence_restore":
+            rationale = "Person returned after absence -> restoring adaptive lighting"
+        else:
+            rationale = "; ".join(rationale_parts) if rationale_parts else "No adjustment needed"
+
         if actions and self.on_action:
-            self.on_action("; ".join(actions), reason)
+            self.on_action("; ".join(actions), reason, rationale)

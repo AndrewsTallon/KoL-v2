@@ -235,6 +235,17 @@ def create_app(app_state: dict) -> FastAPI:
 
         return asdict(report)
 
+    # ---- Decision Log ----
+
+    @app.get("/api/decisions")
+    async def get_decisions():
+        decisions = app_state.get("recent_decisions", [])
+        lock = app_state.get("decisions_lock")
+        if lock:
+            with lock:
+                return list(decisions)
+        return list(decisions)
+
     # ---- Train models ----
 
     @app.post("/api/ai/train")
@@ -257,6 +268,17 @@ def create_app(app_state: dict) -> FastAPI:
                 lamp = app_state["lamp"]
                 dtr, dtr1 = lamp.state.last_temp
 
+                # Get latest decision if available
+                last_decision = None
+                decisions = app_state.get("recent_decisions", [])
+                lock = app_state.get("decisions_lock")
+                if decisions:
+                    if lock:
+                        with lock:
+                            last_decision = decisions[-1] if decisions else None
+                    else:
+                        last_decision = decisions[-1] if decisions else None
+
                 msg = {
                     "sensor": {
                         "occupied": snap.filt_occupied,
@@ -276,6 +298,7 @@ def create_app(app_state: dict) -> FastAPI:
                     "auto": app_state["auto"],
                     "runtime_s": app_state["runtime_tracker"].get("total_s", 0),
                     "energy_est_wh": app_state["runtime_tracker"].get("energy_wh", 0),
+                    "last_decision": last_decision,
                     "ts": time.time(),
                 }
 

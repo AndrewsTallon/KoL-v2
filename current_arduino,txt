@@ -139,6 +139,9 @@ bool     rawOccLast        = false;
 bool     occupiedFiltered  = false;
 uint32_t rawChangedAt      = 0;
 
+// Confirmation filter diagnostic (exposed in JSON for Python)
+uint8_t  presentCountGlobal = 0;
+
 // Lux
 float    currentLux        = -1.0;
 float    smoothedLux       = -1.0;
@@ -380,6 +383,7 @@ bool confirmationFilter(bool instant) {
   for (uint8_t i = 0; i < CONFIRM_WINDOW; i++) {
     if (confirmBuf[i]) presentCount++;
   }
+  presentCountGlobal = presentCount;
 
   // Asymmetric thresholds: easier to stay on than to turn on
   if (!confirmedRaw && presentCount >= CONFIRM_ON_THRESH) {
@@ -500,6 +504,14 @@ void outputJSON() {
   // Diagnostics
   Serial.print(",\"uptime_s\":");  Serial.print((millis() - bootTimeMs) / 1000);
   Serial.print(",\"seq\":");       Serial.print(heartbeat);
+
+  // Occupancy filter diagnostics (for Python data quality analysis)
+  Serial.print(",\"confirm_count\":");  Serial.print(presentCountGlobal);
+  Serial.print(",\"filter_stage\":\"");
+  if (occupiedFiltered)  Serial.print("debounced");
+  else if (confirmedRaw) Serial.print("confirmed");
+  else                   Serial.print("instant");
+  Serial.print("\"");
 
   Serial.println("}");
 }

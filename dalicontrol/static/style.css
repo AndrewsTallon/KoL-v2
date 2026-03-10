@@ -271,6 +271,79 @@ canvas { width: 100% !important; height: 100% !important; }
   font-size: 0.85rem;
 }
 
+/* Decision Log Panel */
+.decision-panel {
+  max-height: 500px;
+  display: flex;
+  flex-direction: column;
+}
+
+.decision-latest {
+  background: var(--card);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.decision-latest .decision-time {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+}
+
+.decision-latest .decision-rationale {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.decision-log {
+  overflow-y: auto;
+  max-height: 350px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.decision-entry {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.decision-entry .de-time {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  min-width: 60px;
+}
+
+.decision-entry .de-action {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--border);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.decision-entry .de-rationale {
+  font-size: 0.85rem;
+  color: var(--text);
+  flex: 1;
+}
+
+.decision-entry .de-mode {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .top-row { grid-template-columns: 1fr; }
