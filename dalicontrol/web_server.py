@@ -40,7 +40,7 @@ class CCTRequest(BaseModel):
     kelvin: int
 
 class ModeRequest(BaseModel):
-    mode: Optional[str] = None   # "baseline" or "ai"
+    mode: Optional[str] = None   # "manual" or "ai"
     auto: Optional[bool] = None
 
 class PowerRequest(BaseModel):
@@ -68,7 +68,7 @@ def create_app(app_state: dict) -> FastAPI:
         telem: TelemetryLogger
         operator: AIOperator
         adaptive_engine: AdaptiveEngine (or None)
-        mode: str  ("baseline" or "ai")
+        mode: str  ("manual" or "ai")
         auto: bool
         nominal_power_watts: float
         runtime_tracker: dict  (shared mutable for runtime tracking)
@@ -153,7 +153,7 @@ def create_app(app_state: dict) -> FastAPI:
 
     @app.post("/api/mode")
     async def set_mode(req: ModeRequest):
-        if req.mode is not None and req.mode in ("baseline", "ai"):
+        if req.mode is not None and req.mode in ("manual", "ai"):
             old_mode = app_state["mode"]
             app_state["mode"] = req.mode
             logger.info("Mode changed: %s → %s", old_mode, req.mode)
@@ -164,10 +164,16 @@ def create_app(app_state: dict) -> FastAPI:
                 # Lazy-create engine if it doesn't exist yet
                 if engine is None:
                     from .adaptive_engine import AdaptiveEngine
+                    from .preferences import UserPreferences
+                    prefs = app_state.get("preferences")
+                    if not prefs:
+                        prefs = UserPreferences.load()
+                        app_state["preferences"] = prefs
                     engine = AdaptiveEngine(
                         app_state["lamp"],
                         app_state["lamp_lock"],
                         settings=app_state.get("settings"),
+                        preferences=prefs,
                     )
 
                     # Wire up the telemetry callback
@@ -246,6 +252,31 @@ def create_app(app_state: dict) -> FastAPI:
             return {"ok": True, "settings": new_state}
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # ---- User Preferences ----
+
+    @app.get("/api/preferences")
+    async def get_preferences():
+        prefs = app_state.get("preferences")
+        if not prefs:
+            from .preferences import UserPreferences
+            prefs = UserPreferences.load()
+            app_state["preferences"] = prefs
+        return prefs.to_dict()
+
+    @app.post("/api/preferences")
+    async def update_preferences(req: dict):
+        prefs = app_state.get("preferences")
+        if not prefs:
+            from .preferences import UserPreferences
+            prefs = UserPreferences.load()
+            app_state["preferences"] = prefs
+        new_state = prefs.update(req)
+        # Push updated preferences to adaptive engine if running
+        engine = app_state.get("adaptive_engine")
+        if engine:
+            engine.preferences = prefs
+        return {"ok": True, "preferences": new_state}
 
     # ---- Telemetry ----
 

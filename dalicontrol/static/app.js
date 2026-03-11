@@ -270,11 +270,17 @@ function updateDashboard(data) {
   // Mode toggle sync
   syncModeButtons(data.mode);
 
-  // Auto toggle sync
-  document.getElementById('autoToggle').checked = data.auto;
-  document.getElementById('autoDesc').textContent = data.auto
-    ? 'Active - lights respond to presence'
-    : 'Disabled - manual control only';
+  // Auto toggle sync — only show auto card in AI mode
+  const autoCard = document.getElementById('autoCard');
+  if (data.mode === 'ai') {
+    autoCard.style.display = '';
+    document.getElementById('autoToggle').checked = data.auto;
+    document.getElementById('autoDesc').textContent = data.auto
+      ? 'Active - lights respond to presence'
+      : 'Disabled - manual control only';
+  } else {
+    autoCard.style.display = 'none';
+  }
 
   // AI panel visibility
   document.getElementById('aiPanel').style.display =
@@ -383,7 +389,11 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
     const result = await apiPost('/api/mode', { mode });
     if (result) {
       syncModeButtons(mode);
-      showToast(`Switched to ${mode === 'ai' ? 'AI Adaptive' : 'Baseline'} mode`, 'success');
+      showToast(`Switched to ${mode === 'ai' ? 'AI Adaptive' : 'Manual'} mode`, 'success');
+      // On first AI activation, check if preferences are completed
+      if (mode === 'ai') {
+        checkPreferencesOnAiActivation();
+      }
     } else {
       btn.classList.remove('loading');
       showToast('Failed to switch mode', 'error');
@@ -507,6 +517,9 @@ async function loadDecisions() {
     if (d.weather) {
       badgesHtml += `<span class="context-badge context-weather">${escapeHtml(d.weather)}</span>`;
     }
+    if (d.model_type) {
+      badgesHtml += `<span class="context-badge context-model">${escapeHtml(d.model_type)}</span>`;
+    }
 
     entry.innerHTML =
       `<span class="de-time">${timeStr}</span>` +
@@ -604,12 +617,177 @@ document.getElementById('settingsSaveBtn').onclick = async () => {
   }
 };
 
+// ---- Preferences Questionnaire Modal ----
+
+const prefsModal = document.getElementById('preferencesModal');
+let wizardStep = 1;
+const totalSteps = 4;
+
+function openPrefsModal() {
+  // Load current preferences first
+  apiGet('/api/preferences').then(prefs => {
+    if (prefs) {
+      populatePrefsForm(prefs);
+    }
+    prefsModal.style.display = 'flex';
+    setWizardStep(1);
+  });
+}
+
+function closePrefsModal() {
+  prefsModal.style.display = 'none';
+}
+
+function populatePrefsForm(p) {
+  document.getElementById('prefWakeTime').value = p.wake_time || '07:00';
+  document.getElementById('prefSleepTime').value = p.sleep_time || '23:00';
+  document.getElementById('prefWorkStart').value = p.work_start || '09:00';
+  document.getElementById('prefWorkEnd').value = p.work_end || '17:00';
+
+  setSliderVal('prefMorningBrightness', p.morning_brightness || 70);
+  setSliderVal('prefMiddayBrightness', p.midday_brightness || 60);
+  setSliderVal('prefEveningBrightness', p.evening_brightness || 50);
+  setSliderVal('prefNightBrightness', p.night_brightness || 30);
+
+  setSliderVal('prefMorningCCT', p.morning_cct || 4000);
+  setSliderVal('prefMiddayCCT', p.midday_cct || 5500);
+  setSliderVal('prefEveningCCT', p.evening_cct || 3000);
+  setSliderVal('prefNightCCT', p.night_cct || 2700);
+
+  const warmCoolRadios = document.querySelectorAll('input[name="warmCoolPref"]');
+  warmCoolRadios.forEach(r => { r.checked = r.value === (p.warm_cool_preference || 'neutral'); });
+
+  const sensitivityRadios = document.querySelectorAll('input[name="changeSensitivity"]');
+  sensitivityRadios.forEach(r => { r.checked = r.value === (p.change_sensitivity || 'medium'); });
+}
+
+function setSliderVal(id, val) {
+  const slider = document.getElementById(id);
+  if (slider) {
+    slider.value = val;
+    const valEl = document.getElementById(id + 'Val');
+    if (valEl) valEl.textContent = val;
+  }
+}
+
+function setWizardStep(step) {
+  wizardStep = step;
+  document.querySelectorAll('.wizard-page').forEach(p => p.classList.remove('active'));
+  document.getElementById('wizardStep' + step).classList.add('active');
+
+  document.querySelectorAll('.wizard-step').forEach(s => {
+    const sStep = parseInt(s.dataset.step);
+    s.classList.toggle('active', sStep === step);
+    s.classList.toggle('completed', sStep < step);
+  });
+
+  document.getElementById('wizardPrevBtn').style.visibility = step === 1 ? 'hidden' : 'visible';
+  document.getElementById('wizardNextBtn').textContent = step === totalSteps ? 'Save' : 'Next';
+}
+
+function collectPrefsData() {
+  const warmCool = document.querySelector('input[name="warmCoolPref"]:checked');
+  const sensitivity = document.querySelector('input[name="changeSensitivity"]:checked');
+
+  return {
+    wake_time: document.getElementById('prefWakeTime').value,
+    sleep_time: document.getElementById('prefSleepTime').value,
+    work_start: document.getElementById('prefWorkStart').value,
+    work_end: document.getElementById('prefWorkEnd').value,
+    morning_brightness: parseInt(document.getElementById('prefMorningBrightness').value),
+    midday_brightness: parseInt(document.getElementById('prefMiddayBrightness').value),
+    evening_brightness: parseInt(document.getElementById('prefEveningBrightness').value),
+    night_brightness: parseInt(document.getElementById('prefNightBrightness').value),
+    warm_cool_preference: warmCool ? warmCool.value : 'neutral',
+    morning_cct: parseInt(document.getElementById('prefMorningCCT').value),
+    midday_cct: parseInt(document.getElementById('prefMiddayCCT').value),
+    evening_cct: parseInt(document.getElementById('prefEveningCCT').value),
+    night_cct: parseInt(document.getElementById('prefNightCCT').value),
+    change_sensitivity: sensitivity ? sensitivity.value : 'medium',
+    completed: true,
+  };
+}
+
+async function savePreferences() {
+  const data = collectPrefsData();
+  const result = await apiPost('/api/preferences', data);
+  if (result && result.ok) {
+    showToast('Lighting preferences saved', 'success');
+    closePrefsModal();
+    updatePrefsStatus(true);
+  } else {
+    showToast('Failed to save preferences', 'error');
+  }
+}
+
+function updatePrefsStatus(completed) {
+  const statusEl = document.getElementById('prefsStatus');
+  if (statusEl) {
+    statusEl.textContent = completed ? 'Preferences configured' : 'Not configured';
+    statusEl.className = 'prefs-status ' + (completed ? 'configured' : 'not-configured');
+  }
+}
+
+async function checkPreferencesOnAiActivation() {
+  const prefs = await apiGet('/api/preferences');
+  if (prefs && !prefs.completed) {
+    openPrefsModal();
+  }
+  updatePrefsStatus(prefs && prefs.completed);
+}
+
+// Wizard navigation
+document.getElementById('wizardNextBtn').onclick = () => {
+  if (wizardStep < totalSteps) {
+    setWizardStep(wizardStep + 1);
+  } else {
+    savePreferences();
+  }
+};
+
+document.getElementById('wizardPrevBtn').onclick = () => {
+  if (wizardStep > 1) {
+    setWizardStep(wizardStep - 1);
+  }
+};
+
+document.getElementById('prefsCloseBtn').onclick = closePrefsModal;
+prefsModal.onclick = (e) => {
+  if (e.target === prefsModal) closePrefsModal();
+};
+
+// Open preferences from AI panel and settings panel
+document.getElementById('openPrefsBtn').onclick = openPrefsModal;
+document.getElementById('settingsPrefsBtn').onclick = openPrefsModal;
+
+// Wizard step indicators are clickable
+document.querySelectorAll('.wizard-step').forEach(s => {
+  s.onclick = () => setWizardStep(parseInt(s.dataset.step));
+});
+
+// Bind slider value displays
+['prefMorningBrightness', 'prefMiddayBrightness', 'prefEveningBrightness', 'prefNightBrightness',
+ 'prefMorningCCT', 'prefMiddayCCT', 'prefEveningCCT', 'prefNightCCT'].forEach(id => {
+  const slider = document.getElementById(id);
+  if (slider) {
+    slider.oninput = () => {
+      const valEl = document.getElementById(id + 'Val');
+      if (valEl) valEl.textContent = slider.value;
+    };
+  }
+});
+
 // ---- Init ----
 connectWS();
 loadRuns();
 loadDecisions();
 loadSettings();
 setInterval(loadDecisions, 30000);
+
+// Load preferences status on init
+apiGet('/api/preferences').then(prefs => {
+  if (prefs) updatePrefsStatus(prefs.completed);
+});
 
 // Fetch initial status
 apiGet('/api/status').then(data => {

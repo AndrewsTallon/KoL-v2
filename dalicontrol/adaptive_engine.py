@@ -47,11 +47,13 @@ class AdaptiveEngine:
         lamp_lock: threading.Lock,
         settings=None,
         nominal_power_watts: float = 40.0,
+        preferences=None,
     ):
         self.lamp = lamp
         self.lamp_lock = lamp_lock
         self.settings = settings
         self.nominal_power_watts = nominal_power_watts
+        self.preferences = preferences  # UserPreferences instance (optional)
 
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -80,6 +82,9 @@ class AdaptiveEngine:
         self._weather_cache: Optional[dict] = None
         self._weather_cache_time: float = 0.0
         self._weather_cache_ttl: float = 1800.0  # 30 minutes
+
+        # Prediction source tracking for decision logging
+        self._prediction_source: str = "fallback"
 
         # Callback for telemetry logging
         self.on_action = None  # callable(action_str, reason_str, rationale_str, context)
@@ -115,7 +120,11 @@ class AdaptiveEngine:
     def train_from_baseline(self, csv_paths: Optional[list] = None) -> bool:
         """Train ML models from baseline telemetry CSV files."""
         if csv_paths is None:
-            csv_paths = sorted(TELEM_DIR.glob("run_*_baseline.csv"))
+            # Accept both legacy "baseline" and new "manual" CSV files
+            csv_paths = sorted(
+                list(TELEM_DIR.glob("run_*_baseline.csv"))
+                + list(TELEM_DIR.glob("run_*_manual.csv"))
+            )
 
         if not csv_paths:
             logger.warning("No baseline CSV files found for training.")
@@ -235,7 +244,11 @@ class AdaptiveEngine:
     # ---- Prediction ----
 
     def predict(self, lux: float, hour: Optional[float] = None) -> Tuple[float, int]:
-        """Predict recommended brightness (%) and CCT (Kelvin)."""
+        """Predict recommended brightness (%) and CCT (Kelvin).
+
+        Priority: ML models (if trained) blended with user preferences,
+        then user preferences alone, then generic fallback heuristics.
+        """
         if hour is None:
             now = datetime.now()
             hour = now.hour + now.minute / 60.0
@@ -243,13 +256,37 @@ class AdaptiveEngine:
         hour_sin = math.sin(2 * math.pi * hour / 24.0)
         hour_cos = math.cos(2 * math.pi * hour / 24.0)
 
+        prefs = self.preferences
+
         if self._models_loaded and self._brightness_model and self._cct_model:
             X = [[hour_sin, hour_cos, lux]]
-            brightness_pct = float(self._brightness_model.predict(X)[0])
-            cct_kelvin = int(round(self._cct_model.predict(X)[0]))
+            ml_brightness = float(self._brightness_model.predict(X)[0])
+            ml_cct = int(round(self._cct_model.predict(X)[0]))
+
+            if prefs and prefs.completed:
+                # Blend ML predictions with user preferences (70% ML, 30% prefs)
+                pref_brightness = prefs.get_preferred_brightness(hour)
+                pref_cct = prefs.get_preferred_cct(hour)
+                brightness_pct = 0.7 * ml_brightness + 0.3 * pref_brightness
+                cct_kelvin = int(round(0.7 * ml_cct + 0.3 * pref_cct))
+                self._prediction_source = "ML + preferences"
+            else:
+                brightness_pct = ml_brightness
+                cct_kelvin = ml_cct
+                self._prediction_source = "ML"
+        elif prefs and prefs.completed:
+            # No ML models yet — use preferences as primary source
+            brightness_pct = prefs.get_preferred_brightness(hour)
+            cct_kelvin = prefs.get_preferred_cct(hour)
+            # Still factor in ambient light for brightness
+            lux_factor = self._fallback_brightness(lux) / 100.0
+            brightness_pct = brightness_pct * lux_factor + brightness_pct * (1 - lux_factor) * 0.5
+            brightness_pct = max(brightness_pct, 10.0)
+            self._prediction_source = "preferences"
         else:
             brightness_pct = self._fallback_brightness(lux)
             cct_kelvin = self._fallback_cct(hour)
+            self._prediction_source = "fallback"
 
         brightness_pct = max(5.0, min(100.0, brightness_pct))
         cct_kelvin = max(2700, min(6500, cct_kelvin))
@@ -298,6 +335,45 @@ class AdaptiveEngine:
             return "evening wind-down"
         else:
             return "night wind-down"
+
+    def _build_cct_reasoning(
+        self, rec_cct: int, circadian_target: int, phase: str,
+        hour: float, source: str,
+    ) -> str:
+        """Build explicit reasoning for CCT changes based on circadian rhythm."""
+        cct_diff = abs(rec_cct - circadian_target)
+        temp_desc = "warm" if rec_cct < 3500 else "neutral" if rec_cct < 5000 else "cool"
+
+        # Circadian benefit explanation per phase
+        phase_benefits = {
+            "pre-dawn wind-down": "warm tones support melatonin production for rest",
+            "morning warm-up": "transitioning to cooler tones to boost morning alertness",
+            "midday peak alertness": "cool white light supports focus and productivity",
+            "afternoon transition": "gradually warming as the day winds down",
+            "evening wind-down": "warm tones ease the transition toward sleep",
+            "night wind-down": "warm tones support melatonin production for rest",
+        }
+        benefit = phase_benefits.get(phase, "")
+
+        if cct_diff <= 200:
+            # Aligns with circadian
+            reason = f"CCT {rec_cct}K aligns with circadian {phase} target ({circadian_target}K) - {benefit}"
+        else:
+            # Diverges from circadian (user preferences or ML override)
+            if "preferences" in source:
+                reason = (
+                    f"CCT {rec_cct}K set by user preference "
+                    f"(circadian target: {circadian_target}K for {phase})"
+                )
+            elif "ML" in source:
+                reason = (
+                    f"CCT {rec_cct}K from learned pattern "
+                    f"(circadian target: {circadian_target}K for {phase})"
+                )
+            else:
+                reason = f"CCT {rec_cct}K ({temp_desc}) for {phase} - {benefit}"
+
+        return reason
 
     def _infer_weather_lux(self, lux: float, hour: float) -> str:
         """Infer weather conditions from ambient lux as a proxy."""
@@ -537,8 +613,9 @@ class AdaptiveEngine:
 
         # Build rich context
         circadian_phase = self._circadian_phase(hour)
+        circadian_cct_target = self._fallback_cct(hour)
         weather_context = self._get_weather_context(lux, hour)
-        model_type = "RandomForest" if self._models_loaded else "fallback"
+        prediction_source = self._prediction_source
         behavior_note = self._behavior_summary(hour)
 
         lux_desc = "bright" if lux > 300 else "moderate" if lux > 100 else "dim"
@@ -550,17 +627,24 @@ class AdaptiveEngine:
         )
         temp_desc = "cool white" if rec_cct >= 5000 else "neutral" if rec_cct >= 3500 else "warm"
 
+        # CCT reasoning: explain why this temperature was chosen
+        cct_reasoning = self._build_cct_reasoning(
+            rec_cct, circadian_cct_target, circadian_phase, hour, prediction_source
+        )
+
         context = {
             "time_exact": time_exact,
             "circadian_phase": circadian_phase,
+            "circadian_cct_target": circadian_cct_target,
             "weather": weather_context,
             "lux": round(lux, 1),
             "lux_desc": lux_desc,
-            "model_type": model_type,
+            "model_type": prediction_source,
             "rec_brightness": round(rec_brightness, 1),
             "rec_cct": rec_cct,
             "brightness_delta": round(brightness_delta, 1),
             "cct_delta": cct_delta,
+            "cct_reasoning": cct_reasoning,
             "behavior_note": behavior_note,
         }
 
@@ -589,28 +673,30 @@ class AdaptiveEngine:
         # Record behavior
         self._record_behavior(hour, rec_brightness, rec_cct)
 
-        # Build rich rationale
+        # Build rich rationale with explicit circadian CCT reasoning
         if reason == "presence_restore":
             rationale = (
                 f"Person returned after absence -> restoring adaptive lighting. "
                 f"{circadian_phase} ({time_exact}), "
-                f"{weather_context}, "
-                f"-> brightness {rec_brightness:.0f}%, CCT {rec_cct}K"
+                f"{weather_context}. "
+                f"Brightness {rec_brightness:.0f}%, {temp_desc} {rec_cct}K. "
+                f"{cct_reasoning}"
             )
         elif actions:
             rationale = (
                 f"{circadian_phase.capitalize()} ({time_exact}), "
                 f"{weather_context}, "
-                f"{lux_desc} ambient ({lux:.0f} lux) "
-                f"-> brightness {rec_brightness:.0f}%, {temp_desc} {rec_cct}K"
+                f"{lux_desc} ambient ({lux:.0f} lux). "
+                f"Brightness {rec_brightness:.0f}%, {temp_desc} {rec_cct}K. "
+                f"{cct_reasoning}"
             )
             if behavior_note:
                 rationale += f" [{behavior_note}]"
         else:
             rationale = (
                 f"No adjustment needed at {time_exact}. "
-                f"{circadian_phase}, {weather_context}, "
-                f"brightness delta {brightness_delta:.0f}% < {self._brightness_threshold}%, "
+                f"{circadian_phase}, {weather_context}. "
+                f"Brightness delta {brightness_delta:.0f}% < {self._brightness_threshold}%, "
                 f"CCT delta {cct_delta}K < {self._cct_threshold}K"
             )
 

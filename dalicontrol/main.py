@@ -25,7 +25,7 @@ TELEM_DIR = Path(__file__).with_name("telemetry")
 
 class TelemetryLogger:
     """
-    Appends rows to a CSV file for later analysis (baseline vs AI, comfort vs savings).
+    Appends rows to a CSV file for later analysis (manual vs AI, comfort vs savings).
     Thread-safe.
     """
 
@@ -194,9 +194,9 @@ def parse_args():
     p.add_argument("--auto", action="store_true", help="Auto on/off based on occupancy")
     p.add_argument(
         "--mode",
-        choices=["baseline", "ai"],
-        default="baseline",
-        help="Labels telemetry so you can compare baseline vs AI runs later.",
+        choices=["manual", "ai"],
+        default="manual",
+        help="'manual' = pure human control (no automation), 'ai' = ML-driven adaptive control.",
     )
     p.add_argument("--web", action="store_true", help="Start the web dashboard server")
     p.add_argument("--web-port", type=int, default=8080, help="Web server port (default: 8080)")
@@ -266,6 +266,11 @@ def main():
             "decisions_lock": _decisions_lock,
         }
 
+        # ---- Load user preferences ----
+        from .preferences import UserPreferences
+        preferences = UserPreferences.load()
+        app_state["preferences"] = preferences
+
         # ---- Adaptive engine (for AI mode) ----
         adaptive_engine = None
         if args.mode == "ai":
@@ -273,6 +278,7 @@ def main():
             adaptive_engine = AdaptiveEngine(
                 lamp, lamp_lock,
                 settings=settings,
+                preferences=preferences,
             )
             # Try to load existing models, otherwise train
             if not adaptive_engine.load_models():
@@ -299,12 +305,9 @@ def main():
             adaptive_engine.start(reader)
             app_state["adaptive_engine"] = adaptive_engine
 
-        # ---- Sensor loop (telemetry + auto-occupancy for baseline) ----
+        # ---- Sensor loop (telemetry only — no automation in manual mode) ----
 
         def sensor_loop():
-            # State tracking
-            last_filt = None
-            vacant_start = None
             last_log_at = 0.0
             last_telem_at = 0.0
 
@@ -332,99 +335,8 @@ def main():
                     ))
                     last_telem_at = now
 
-                # Only run auto-occupancy if enabled and sensor is sending data
-                # In AI mode, occupancy is handled by the adaptive engine
-                if app_state["auto"] and app_state["mode"] == "baseline" and (filt is not None):
-                    dim_delay = settings.dim_delay
-                    dim_level = settings.dim_level
-
-                    # --- Case 1: Someone is PRESENT ---
-                    if filt:
-                        if (not last_filt) or (vacant_start is not None):
-                            logging.info("AUTO: OCCUPIED -> Restoring light")
-                            rationale = "Person detected at desk -> restoring light to 75%"
-                            with lamp_lock:
-                                lamp.set_brightness_pct(75)
-                                save_state(lamp.state)
-
-                                telem.log_row(
-                                    build_row(
-                                        mode=app_state["mode"],
-                                        snap=snap,
-                                        lamp=lamp,
-                                        runtime_tracker=runtime_tracker,
-                                        action="set_brightness_pct(75)",
-                                        reason="auto_occupied_restore",
-                                        rationale=rationale,
-                                    )
-                                )
-                            record_decision(
-                                action="set_brightness_pct(75)",
-                                reason="auto_occupied_restore",
-                                rationale=rationale,
-                                snap=snap,
-                                mode=app_state["mode"],
-                            )
-
-                        vacant_start = None
-                        last_filt = True
-
-                    # --- Case 2: Area is VACANT ---
-                    else:
-                        if last_filt:
-                            logging.info(f"AUTO: VACANT -> Dimming to {dim_level}% for {dim_delay}s")
-                            vacant_start = time.time()
-                            last_filt = False
-                            rationale = f"Desk vacant -> dimming to {dim_level}% as warning before shutdown"
-                            with lamp_lock:
-                                lamp.set_brightness_pct(dim_level)
-
-                                telem.log_row(
-                                    build_row(
-                                        mode=app_state["mode"],
-                                        snap=snap,
-                                        lamp=lamp,
-                                        runtime_tracker=runtime_tracker,
-                                        action=f"set_brightness_pct({dim_level})",
-                                        reason="auto_vacant_dim",
-                                        rationale=rationale,
-                                    )
-                                )
-                            record_decision(
-                                action=f"set_brightness_pct({dim_level})",
-                                reason="auto_vacant_dim",
-                                rationale=rationale,
-                                snap=snap,
-                                mode=app_state["mode"],
-                            )
-
-                        if vacant_start and (time.time() - vacant_start > dim_delay):
-                            logging.info("AUTO: VACANT Timer expired -> Turning OFF")
-                            rationale = f"Vacant for {dim_delay:.0f}s after dimming -> turning off to save energy"
-                            with lamp_lock:
-                                lamp.off()
-                                save_state(lamp.state)
-
-                                telem.log_row(
-                                    build_row(
-                                        mode=app_state["mode"],
-                                        snap=snap,
-                                        lamp=lamp,
-                                        runtime_tracker=runtime_tracker,
-                                        action="off()",
-                                        reason="auto_vacant_off",
-                                        rationale=rationale,
-                                    )
-                                )
-                            record_decision(
-                                action="off()",
-                                reason="auto_vacant_off",
-                                rationale=rationale,
-                                snap=snap,
-                                mode=app_state["mode"],
-                            )
-
-                            vacant_start = None
+                # Manual mode: NO automation at all — pure human control.
+                # AI mode: occupancy is handled by the adaptive engine.
 
                 # Periodic sensor health log
                 if now - last_log_at > 5:

@@ -17,13 +17,13 @@
   <!-- System Controls Bar -->
   <div class="system-controls">
     <div class="mode-toggle" id="modeToggle">
-      <button class="mode-btn active" data-mode="baseline">
-        <span class="mode-label">Baseline</span>
-        <small>Manual + auto rules</small>
+      <button class="mode-btn active" data-mode="manual">
+        <span class="mode-label">Manual</span>
+        <small>Full manual control</small>
       </button>
       <button class="mode-btn" data-mode="ai">
         <span class="mode-label">AI Adaptive</span>
-        <small>ML-driven control</small>
+        <small>AI-driven lighting</small>
       </button>
     </div>
 
@@ -163,8 +163,14 @@
     <!-- AI Controls (only visible in AI mode) -->
     <section class="panel ai-panel" id="aiPanel" style="display:none;">
       <h2>AI Adaptive Control</h2>
-      <button id="trainBtn" class="btn">Train Models from Baseline</button>
-      <span id="trainStatus"></span>
+      <div class="ai-controls-row">
+        <button id="trainBtn" class="btn">Train Models from Data</button>
+        <span id="trainStatus"></span>
+      </div>
+      <div class="ai-controls-row">
+        <button id="openPrefsBtn" class="btn btn-prefs">Edit Lighting Preferences</button>
+        <span id="prefsStatus" class="prefs-status"></span>
+      </div>
     </section>
 
     <!-- Decision Log -->
@@ -232,12 +238,170 @@
             <input type="text" id="sWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
           </div>
         </div>
+        <div class="setting-group full-width">
+          <label>Lighting Preferences</label>
+          <small>Configure your lighting preferences for the AI</small>
+          <button id="settingsPrefsBtn" class="btn btn-prefs">Edit Preferences</button>
+        </div>
         <div class="settings-actions">
           <button id="settingsSaveBtn" class="btn btn-save">Save Settings</button>
         </div>
       </div>
     </section>
   </main>
+
+  <!-- Preferences Questionnaire Modal -->
+  <div class="modal-overlay" id="preferencesModal" style="display:none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Lighting Preferences</h2>
+        <button class="modal-close" id="prefsCloseBtn">&times;</button>
+      </div>
+      <p class="modal-subtitle">Help the AI understand your lighting preferences. These are used as initial guidance and will be refined as the system learns from your usage.</p>
+
+      <!-- Step indicator -->
+      <div class="wizard-steps">
+        <span class="wizard-step active" data-step="1">1. Schedule</span>
+        <span class="wizard-step" data-step="2">2. Brightness</span>
+        <span class="wizard-step" data-step="3">3. Color Temp</span>
+        <span class="wizard-step" data-step="4">4. Sensitivity</span>
+      </div>
+
+      <!-- Step 1: Schedule -->
+      <div class="wizard-page active" id="wizardStep1">
+        <h3>Your Daily Schedule</h3>
+        <div class="pref-grid">
+          <div class="pref-field">
+            <label for="prefWakeTime">Wake Time</label>
+            <input type="time" id="prefWakeTime" value="07:00">
+          </div>
+          <div class="pref-field">
+            <label for="prefSleepTime">Sleep Time</label>
+            <input type="time" id="prefSleepTime" value="23:00">
+          </div>
+          <div class="pref-field">
+            <label for="prefWorkStart">Work Start</label>
+            <input type="time" id="prefWorkStart" value="09:00">
+          </div>
+          <div class="pref-field">
+            <label for="prefWorkEnd">Work End</label>
+            <input type="time" id="prefWorkEnd" value="17:00">
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Brightness -->
+      <div class="wizard-page" id="wizardStep2">
+        <h3>Preferred Brightness Levels</h3>
+        <p class="pref-help">Set your preferred brightness for each part of the day (0-100%).</p>
+        <div class="pref-grid">
+          <div class="pref-field">
+            <label for="prefMorningBrightness">Morning: <span id="prefMorningBrightnessVal">70</span>%</label>
+            <input type="range" id="prefMorningBrightness" min="10" max="100" value="70">
+          </div>
+          <div class="pref-field">
+            <label for="prefMiddayBrightness">Midday: <span id="prefMiddayBrightnessVal">60</span>%</label>
+            <input type="range" id="prefMiddayBrightness" min="10" max="100" value="60">
+          </div>
+          <div class="pref-field">
+            <label for="prefEveningBrightness">Evening: <span id="prefEveningBrightnessVal">50</span>%</label>
+            <input type="range" id="prefEveningBrightness" min="10" max="100" value="50">
+          </div>
+          <div class="pref-field">
+            <label for="prefNightBrightness">Night: <span id="prefNightBrightnessVal">30</span>%</label>
+            <input type="range" id="prefNightBrightness" min="10" max="100" value="30">
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Color Temperature -->
+      <div class="wizard-page" id="wizardStep3">
+        <h3>Color Temperature Preferences</h3>
+        <p class="pref-help">Set your preferred color temperature. Warm (2700K) is relaxing, cool (6500K) promotes alertness.</p>
+        <div class="pref-grid">
+          <div class="pref-field">
+            <label>Overall preference</label>
+            <div class="pref-radio-group">
+              <label class="pref-radio"><input type="radio" name="warmCoolPref" value="warm"> Warm</label>
+              <label class="pref-radio"><input type="radio" name="warmCoolPref" value="neutral" checked> Neutral</label>
+              <label class="pref-radio"><input type="radio" name="warmCoolPref" value="cool"> Cool</label>
+            </div>
+          </div>
+          <div class="pref-field">
+            <label for="prefMorningCCT">Morning: <span id="prefMorningCCTVal">4000</span>K</label>
+            <div class="cct-bar">
+              <span class="warm-label">Warm</span>
+              <input type="range" id="prefMorningCCT" min="2700" max="6500" step="100" value="4000">
+              <span class="cool-label">Cool</span>
+            </div>
+          </div>
+          <div class="pref-field">
+            <label for="prefMiddayCCT">Midday: <span id="prefMiddayCCTVal">5500</span>K</label>
+            <div class="cct-bar">
+              <span class="warm-label">Warm</span>
+              <input type="range" id="prefMiddayCCT" min="2700" max="6500" step="100" value="5500">
+              <span class="cool-label">Cool</span>
+            </div>
+          </div>
+          <div class="pref-field">
+            <label for="prefEveningCCT">Evening: <span id="prefEveningCCTVal">3000</span>K</label>
+            <div class="cct-bar">
+              <span class="warm-label">Warm</span>
+              <input type="range" id="prefEveningCCT" min="2700" max="6500" step="100" value="3000">
+              <span class="cool-label">Cool</span>
+            </div>
+          </div>
+          <div class="pref-field">
+            <label for="prefNightCCT">Night: <span id="prefNightCCTVal">2700</span>K</label>
+            <div class="cct-bar">
+              <span class="warm-label">Warm</span>
+              <input type="range" id="prefNightCCT" min="2700" max="6500" step="100" value="2700">
+              <span class="cool-label">Cool</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Sensitivity -->
+      <div class="wizard-page" id="wizardStep4">
+        <h3>Adjustment Sensitivity</h3>
+        <p class="pref-help">How sensitive should the AI be to changing your light settings?</p>
+        <div class="pref-grid">
+          <div class="pref-field">
+            <div class="pref-radio-group vertical">
+              <label class="pref-radio">
+                <input type="radio" name="changeSensitivity" value="low">
+                <div>
+                  <strong>Low</strong>
+                  <small>Only make large adjustments. Less frequent changes.</small>
+                </div>
+              </label>
+              <label class="pref-radio">
+                <input type="radio" name="changeSensitivity" value="medium" checked>
+                <div>
+                  <strong>Medium</strong>
+                  <small>Balanced approach. Moderate adjustments.</small>
+                </div>
+              </label>
+              <label class="pref-radio">
+                <input type="radio" name="changeSensitivity" value="high">
+                <div>
+                  <strong>High</strong>
+                  <small>Fine-grained adjustments. More responsive to changes.</small>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation buttons -->
+      <div class="wizard-nav">
+        <button class="btn" id="wizardPrevBtn" style="visibility:hidden;">Back</button>
+        <button class="btn btn-primary" id="wizardNextBtn">Next</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>
