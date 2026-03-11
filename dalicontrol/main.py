@@ -14,6 +14,7 @@ from .cct_utils import dtr_to_kelvin
 from .dali_controls import DaliControls
 from .dali_transport import DaliHidTransport
 from .lamp_state import LampController
+from .settings import Settings
 from .usb_occupancy import UsbOccupancyReader
 
 
@@ -58,6 +59,8 @@ class TelemetryLogger:
         "reason",
         "rationale",
         "user_text",
+        "circadian_phase",
+        "weather_context",
     ]
 
     def __init__(self, mode: str):
@@ -103,6 +106,8 @@ def build_row(
     reason: str = "",
     rationale: str = "",
     user_text: str = "",
+    circadian_phase: str = "",
+    weather_context: str = "",
 ) -> dict:
     now_epoch = time.time()
     now_iso = datetime.fromtimestamp(now_epoch).isoformat(timespec="seconds")
@@ -140,6 +145,8 @@ def build_row(
         "reason": reason,
         "rationale": rationale,
         "user_text": user_text,
+        "circadian_phase": circadian_phase,
+        "weather_context": weather_context,
     }
 
 
@@ -150,7 +157,10 @@ _recent_decisions: list = []
 _decisions_lock = threading.Lock()
 
 
-def record_decision(action: str, reason: str, rationale: str, snap, mode: str):
+def record_decision(
+    action: str, reason: str, rationale: str, snap, mode: str,
+    context: Optional[dict] = None,
+):
     """Record a system decision for display in the web UI and telemetry."""
     entry = {
         "ts": time.time(),
@@ -162,6 +172,12 @@ def record_decision(action: str, reason: str, rationale: str, snap, mode: str):
         "occupied": getattr(snap, "filt_occupied", None),
         "mode": mode,
     }
+    if context:
+        entry["circadian_phase"] = context.get("circadian_phase", "")
+        entry["weather"] = context.get("weather", "")
+        entry["rec_brightness"] = context.get("rec_brightness")
+        entry["rec_cct"] = context.get("rec_cct")
+        entry["model_type"] = context.get("model_type", "")
     with _decisions_lock:
         _recent_decisions.append(entry)
         if len(_recent_decisions) > 100:
@@ -195,6 +211,8 @@ def parse_args():
 def main():
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    settings = Settings.load()
 
     telem = TelemetryLogger(mode=args.mode)
     logging.info("Telemetry logging to: %s", telem.path)
@@ -241,7 +259,8 @@ def main():
             "adaptive_engine": None,
             "mode": args.mode,
             "auto": args.auto,
-            "nominal_power_watts": args.nominal_power,
+            "settings": settings,
+            "nominal_power_watts": settings.nominal_power_watts,
             "runtime_tracker": runtime_tracker,
             "recent_decisions": _recent_decisions,
             "decisions_lock": _decisions_lock,
@@ -253,24 +272,27 @@ def main():
             from .adaptive_engine import AdaptiveEngine
             adaptive_engine = AdaptiveEngine(
                 lamp, lamp_lock,
-                nominal_power_watts=args.nominal_power,
+                settings=settings,
             )
             # Try to load existing models, otherwise train
             if not adaptive_engine.load_models():
                 adaptive_engine.train_from_baseline()
 
-            def on_adaptive_action(action_str, reason_str, rationale_str=""):
+            def on_adaptive_action(action_str, reason_str, rationale_str="", context=None):
                 snap = reader.snapshot()
                 telem.log_row(build_row(
                     mode=app_state["mode"], snap=snap, lamp=lamp,
                     runtime_tracker=runtime_tracker,
                     action=action_str, reason=reason_str,
                     rationale=rationale_str,
+                    circadian_phase=context.get("circadian_phase", "") if context else "",
+                    weather_context=context.get("weather", "") if context else "",
                 ))
                 record_decision(
                     action=action_str, reason=reason_str,
                     rationale=rationale_str, snap=snap,
                     mode=app_state["mode"],
+                    context=context,
                 )
 
             adaptive_engine.on_action = on_adaptive_action
@@ -286,10 +308,6 @@ def main():
             last_log_at = 0.0
             last_telem_at = 0.0
 
-            # Settings (thesis-aligned: 60s absence timeout)
-            DIM_DELAY = 60.0   # Seconds to wait at "dim" level before turning off
-            DIM_LEVEL = 10     # Percent brightness for the warning dim
-
             while not stop.is_set():
                 snap = reader.snapshot()
                 filt = snap.filt_occupied
@@ -303,7 +321,7 @@ def main():
                     runtime_tracker["total_s"] += dt
                     dimming_frac = lamp.state.last_level / 254.0
                     runtime_tracker["energy_wh"] += (
-                        app_state["nominal_power_watts"] * dimming_frac * dt / 3600.0
+                        settings.nominal_power_watts * dimming_frac * dt / 3600.0
                     )
 
                 # --- Telemetry heartbeat: 5-second intervals (thesis spec) ---
@@ -317,6 +335,8 @@ def main():
                 # Only run auto-occupancy if enabled and sensor is sending data
                 # In AI mode, occupancy is handled by the adaptive engine
                 if app_state["auto"] and app_state["mode"] == "baseline" and (filt is not None):
+                    dim_delay = settings.dim_delay
+                    dim_level = settings.dim_level
 
                     # --- Case 1: Someone is PRESENT ---
                     if filt:
@@ -352,12 +372,12 @@ def main():
                     # --- Case 2: Area is VACANT ---
                     else:
                         if last_filt:
-                            logging.info(f"AUTO: VACANT -> Dimming to {DIM_LEVEL}% for {DIM_DELAY}s")
+                            logging.info(f"AUTO: VACANT -> Dimming to {dim_level}% for {dim_delay}s")
                             vacant_start = time.time()
                             last_filt = False
-                            rationale = f"Desk vacant -> dimming to {DIM_LEVEL}% as warning before shutdown"
+                            rationale = f"Desk vacant -> dimming to {dim_level}% as warning before shutdown"
                             with lamp_lock:
-                                lamp.set_brightness_pct(DIM_LEVEL)
+                                lamp.set_brightness_pct(dim_level)
 
                                 telem.log_row(
                                     build_row(
@@ -365,22 +385,22 @@ def main():
                                         snap=snap,
                                         lamp=lamp,
                                         runtime_tracker=runtime_tracker,
-                                        action=f"set_brightness_pct({DIM_LEVEL})",
+                                        action=f"set_brightness_pct({dim_level})",
                                         reason="auto_vacant_dim",
                                         rationale=rationale,
                                     )
                                 )
                             record_decision(
-                                action=f"set_brightness_pct({DIM_LEVEL})",
+                                action=f"set_brightness_pct({dim_level})",
                                 reason="auto_vacant_dim",
                                 rationale=rationale,
                                 snap=snap,
                                 mode=app_state["mode"],
                             )
 
-                        if vacant_start and (time.time() - vacant_start > DIM_DELAY):
+                        if vacant_start and (time.time() - vacant_start > dim_delay):
                             logging.info("AUTO: VACANT Timer expired -> Turning OFF")
-                            rationale = "Vacant for 60s after dimming -> turning off to save energy"
+                            rationale = f"Vacant for {dim_delay:.0f}s after dimming -> turning off to save energy"
                             with lamp_lock:
                                 lamp.off()
                                 save_state(lamp.state)

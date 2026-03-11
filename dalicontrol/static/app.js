@@ -183,6 +183,25 @@ function addChartPoint(data) {
   occupancyChart.update('none');
 }
 
+// ---- Toast Notifications ----
+
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  // Trigger animation
+  requestAnimationFrame(() => { toast.classList.add('show'); });
+
+  setTimeout(() => {
+    toast.classList.remove('show');
+    toast.classList.add('hide');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
 // ---- WebSocket ----
 
 function connectWS() {
@@ -248,9 +267,14 @@ function updateDashboard(data) {
     data.energy_est_wh !== undefined ? data.energy_est_wh.toFixed(1) : '--';
   document.getElementById('statMode').textContent = data.mode.toUpperCase();
 
-  // Mode/Auto sync
-  document.getElementById('modeSelect').value = data.mode;
+  // Mode toggle sync
+  syncModeButtons(data.mode);
+
+  // Auto toggle sync
   document.getElementById('autoToggle').checked = data.auto;
+  document.getElementById('autoDesc').textContent = data.auto
+    ? 'Active - lights respond to presence'
+    : 'Disabled - manual control only';
 
   // AI panel visibility
   document.getElementById('aiPanel').style.display =
@@ -263,7 +287,34 @@ function updateDashboard(data) {
     const timeStr = ld.ts_iso ? ld.ts_iso.substring(11) : new Date(ld.ts * 1000).toLocaleTimeString();
     latestEl.querySelector('.decision-time').textContent = timeStr + ' · ' + (ld.mode || '').toUpperCase();
     latestEl.querySelector('.decision-rationale').textContent = ld.rationale;
+
+    // Context badges
+    const badgesEl = document.getElementById('latestBadges');
+    badgesEl.innerHTML = '';
+    if (ld.circadian_phase) {
+      badgesEl.appendChild(makeBadge(ld.circadian_phase, 'circadian'));
+    }
+    if (ld.weather) {
+      badgesEl.appendChild(makeBadge(ld.weather, 'weather'));
+    }
+    if (ld.model_type) {
+      badgesEl.appendChild(makeBadge(ld.model_type, 'model'));
+    }
   }
+}
+
+function makeBadge(text, type) {
+  const span = document.createElement('span');
+  span.className = `context-badge context-${type}`;
+  span.textContent = text;
+  return span;
+}
+
+function syncModeButtons(mode) {
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+    btn.classList.remove('loading');
+  });
 }
 
 function formatDuration(seconds) {
@@ -324,20 +375,32 @@ document.getElementById('cctBtn').onclick = () => {
 document.getElementById('onBtn').onclick = () => { apiPost('/api/lamp/on', {}); };
 document.getElementById('offBtn').onclick = () => { apiPost('/api/lamp/off', {}); };
 
-// Mode select
-document.getElementById('modeSelect').onchange = (e) => {
-  apiPost('/api/mode', { mode: e.target.value });
-};
+// Mode toggle buttons
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.onclick = async () => {
+    const mode = btn.dataset.mode;
+    btn.classList.add('loading');
+    const result = await apiPost('/api/mode', { mode });
+    if (result) {
+      syncModeButtons(mode);
+      showToast(`Switched to ${mode === 'ai' ? 'AI Adaptive' : 'Baseline'} mode`, 'success');
+    } else {
+      btn.classList.remove('loading');
+      showToast('Failed to switch mode', 'error');
+    }
+  };
+});
 
 // Auto toggle
-document.getElementById('autoToggle').onchange = (e) => {
-  apiPost('/api/mode', { auto: e.target.checked });
-};
-
-// Nominal power
-document.getElementById('powerBtn').onclick = () => {
-  const watts = parseFloat(document.getElementById('powerInput').value);
-  if (watts > 0) apiPost('/api/config/power', { nominal_power_watts: watts });
+document.getElementById('autoToggle').onchange = async (e) => {
+  const enabled = e.target.checked;
+  const result = await apiPost('/api/mode', { auto: enabled });
+  if (result) {
+    document.getElementById('autoDesc').textContent = enabled
+      ? 'Active - lights respond to presence'
+      : 'Disabled - manual control only';
+    showToast(enabled ? 'Auto occupancy enabled' : 'Auto occupancy disabled', 'info');
+  }
 };
 
 // Train AI models
@@ -353,7 +416,6 @@ document.getElementById('downloadBtn').onclick = async () => {
   const runSelect = document.getElementById('runSelect');
   const selected = runSelect.value;
   if (selected === 'live') {
-    // Download current run — get the latest run name
     const runs = await apiGet('/api/telemetry/runs');
     if (runs && runs.length > 0) {
       window.open(`/api/telemetry/download/${runs[0].name}`, '_blank');
@@ -368,7 +430,6 @@ async function loadRuns() {
   const runs = await apiGet('/api/telemetry/runs');
   if (!runs) return;
   const select = document.getElementById('runSelect');
-  // Keep the "Live Data" option
   while (select.options.length > 1) select.remove(1);
   for (const run of runs) {
     const opt = document.createElement('option');
@@ -386,7 +447,6 @@ document.getElementById('runSelect').onchange = async (e) => {
   const data = await apiGet(`/api/telemetry/data?run=${e.target.value}&last=${window_min}`);
   if (!data || !Array.isArray(data)) return;
 
-  // Clear and repopulate charts
   chartData.timestamps.length = 0;
   chartData.brightness.length = 0;
   chartData.lux.length = 0;
@@ -404,7 +464,6 @@ document.getElementById('runSelect').onchange = async (e) => {
     chartData.brightness.push(pct);
     chartData.lux.push(parseFloat(row.lux) || 0);
 
-    // Approximate CCT from DTR
     const dtr = parseInt(row.lamp_temp_dtr) || 16;
     const t = (dtr - 16) / (50 - 16);
     const cctK = Math.round(2700 + t * (6500 - 2700));
@@ -433,7 +492,6 @@ async function loadDecisions() {
   const logEl = document.getElementById('decisionLog');
   logEl.innerHTML = '';
 
-  // Show most recent 50, newest first
   const recent = decisions.slice(-50).reverse();
 
   for (const d of recent) {
@@ -442,22 +500,40 @@ async function loadDecisions() {
 
     const timeStr = d.ts_iso ? d.ts_iso.substring(11) : new Date(d.ts * 1000).toLocaleTimeString();
 
+    let badgesHtml = '';
+    if (d.circadian_phase) {
+      badgesHtml += `<span class="context-badge context-circadian">${escapeHtml(d.circadian_phase)}</span>`;
+    }
+    if (d.weather) {
+      badgesHtml += `<span class="context-badge context-weather">${escapeHtml(d.weather)}</span>`;
+    }
+
     entry.innerHTML =
       `<span class="de-time">${timeStr}</span>` +
       `<span class="de-action">${escapeHtml(d.reason || '')}</span>` +
-      `<span class="de-rationale">${escapeHtml(d.rationale || d.action || '')}</span>` +
+      `<span class="de-rationale">${escapeHtml(d.rationale || d.action || '')}` +
+      (badgesHtml ? `<div class="de-badges">${badgesHtml}</div>` : '') +
+      `</span>` +
       `<span class="de-mode">${(d.mode || '').toUpperCase()}</span>`;
 
     logEl.appendChild(entry);
   }
 
-  // Update latest highlight if we have decisions
   if (recent.length > 0) {
     const ld = recent[0];
     const latestEl = document.getElementById('latestDecision');
     const timeStr = ld.ts_iso ? ld.ts_iso.substring(11) : '';
     latestEl.querySelector('.decision-time').textContent = timeStr + ' · ' + (ld.mode || '').toUpperCase();
     latestEl.querySelector('.decision-rationale').textContent = ld.rationale || ld.action || '';
+
+    const badgesEl = document.getElementById('latestBadges');
+    badgesEl.innerHTML = '';
+    if (ld.circadian_phase) {
+      badgesEl.appendChild(makeBadge(ld.circadian_phase, 'circadian'));
+    }
+    if (ld.weather) {
+      badgesEl.appendChild(makeBadge(ld.weather, 'weather'));
+    }
   }
 }
 
@@ -467,22 +543,84 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ---- Settings Panel ----
+
+const settingsToggle = document.getElementById('settingsToggle');
+const settingsBody = document.getElementById('settingsBody');
+const collapseIcon = document.getElementById('collapseIcon');
+
+settingsToggle.onclick = () => {
+  const collapsed = settingsBody.classList.toggle('collapsed');
+  collapseIcon.textContent = collapsed ? '\u25B6' : '\u25BC';
+};
+
+// Settings field mappings
+const settingsFields = {
+  dim_delay: 'sDimDelay',
+  dim_level: 'sDimLevel',
+  absence_timeout: 'sAbsenceTimeout',
+  eval_interval: 'sEvalInterval',
+  brightness_threshold: 'sBrightnessThreshold',
+  cct_threshold: 'sCctThreshold',
+  nominal_power_watts: 'sNominalPower',
+  weather_api_key: 'sWeatherApiKey',
+  weather_location: 'sWeatherLocation',
+};
+
+async function loadSettings() {
+  const settings = await apiGet('/api/settings');
+  if (!settings) return;
+
+  for (const [key, elId] of Object.entries(settingsFields)) {
+    const el = document.getElementById(elId);
+    if (el && settings[key] !== undefined) {
+      el.value = settings[key];
+    }
+  }
+}
+
+document.getElementById('settingsSaveBtn').onclick = async () => {
+  const payload = {};
+  for (const [key, elId] of Object.entries(settingsFields)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    const val = el.value;
+    if (val === '' || val === undefined) continue;
+
+    if (['weather_api_key', 'weather_location'].includes(key)) {
+      payload[key] = val;
+    } else {
+      payload[key] = parseFloat(val);
+    }
+  }
+
+  const result = await apiPost('/api/settings', payload);
+  if (result && result.ok) {
+    showToast('Settings saved successfully', 'success');
+  } else if (result && result.error) {
+    showToast('Error: ' + result.error, 'error');
+  } else {
+    showToast('Failed to save settings', 'error');
+  }
+};
+
 // ---- Init ----
 connectWS();
 loadRuns();
 loadDecisions();
+loadSettings();
 setInterval(loadDecisions, 30000);
 
 // Fetch initial status
 apiGet('/api/status').then(data => {
   if (data) {
-    // Set sliders to current values
     if (!data.lamp.is_off) {
       brightnessSlider.value = Math.round(data.lamp.brightness_pct);
       brightnessVal.textContent = Math.round(data.lamp.brightness_pct);
     }
     cctSlider.value = data.lamp.cct_kelvin;
     cctVal.textContent = data.lamp.cct_kelvin;
-    document.getElementById('powerInput').value = data.nominal_power_watts || 40;
+    syncModeButtons(data.mode);
+    document.getElementById('autoToggle').checked = data.auto;
   }
 });
