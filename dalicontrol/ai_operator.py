@@ -11,8 +11,7 @@ from typing import Any, Dict, List, Optional
 from .dali_controls import DaliControls, clamp
 from .dali_transport import DaliHidTransport
 from .lamp_state import COOL_PRESET, LampController, LampState, WARM_PRESET
-
-STATE_PATH = Path(__file__).with_name("state.json")
+from .paths import STATE_PATH
 MAX_ACTIONS_PER_SEC = 4
 
 

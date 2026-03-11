@@ -13,9 +13,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger(__name__)
+from .paths import SETTINGS_PATH
 
-SETTINGS_PATH = Path(__file__).with_name("settings.json")
+logger = logging.getLogger(__name__)
 
 # Validation ranges: (min, max) for numeric fields
 _RANGES: Dict[str, tuple] = {
