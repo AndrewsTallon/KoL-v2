@@ -22,11 +22,9 @@ from typing import Optional, Tuple
 
 from .cct_utils import dtr_to_kelvin, kelvin_to_dtr, level_to_pct
 from .lamp_state import LampController
+from .paths import MODELS_DIR, TELEM_DIR
 
 logger = logging.getLogger(__name__)
-
-MODELS_DIR = Path(__file__).with_name("models")
-TELEM_DIR = Path(__file__).with_name("telemetry")
 
 # Maximum behavior history entries
 _MAX_BEHAVIOR_HISTORY = 500

@@ -13,9 +13,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict
 
-logger = logging.getLogger(__name__)
+from .paths import PREFERENCES_PATH
 
-PREFERENCES_PATH = Path(__file__).with_name("preferences.json")
+logger = logging.getLogger(__name__)
 
 
 @dataclass

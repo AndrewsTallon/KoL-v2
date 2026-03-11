@@ -14,13 +14,12 @@ from .cct_utils import dtr_to_kelvin
 from .dali_controls import DaliControls
 from .dali_transport import DaliHidTransport
 from .lamp_state import LampController
+from .paths import TELEM_DIR
 from .settings import Settings
 from .usb_occupancy import UsbOccupancyReader
 
 
 # ---------------- Telemetry ----------------
-
-TELEM_DIR = Path(__file__).with_name("telemetry")
 
 
 class TelemetryLogger:

@@ -4,3 +4,10 @@ __pycache__/
 dalicontrol/models/
 *.egg-info/
 .env
+
+# PyInstaller build artifacts
+build/
+dist/
+
+# Inno Setup output
+Output/

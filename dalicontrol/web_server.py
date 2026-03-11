@@ -24,11 +24,9 @@ from pydantic import BaseModel
 
 from .cct_utils import dtr_to_kelvin, kelvin_to_dtr, level_to_pct
 from .energy_estimator import estimate_energy
+from .paths import STATIC_DIR, TELEM_DIR
 
 logger = logging.getLogger(__name__)
-
-STATIC_DIR = Path(__file__).with_name("static")
-TELEM_DIR = Path(__file__).with_name("telemetry")
 
 
 # --- Pydantic request models ---
