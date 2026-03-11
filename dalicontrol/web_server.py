@@ -46,6 +46,17 @@ class ModeRequest(BaseModel):
 class PowerRequest(BaseModel):
     nominal_power_watts: float
 
+class SettingsRequest(BaseModel):
+    dim_delay: Optional[float] = None
+    dim_level: Optional[int] = None
+    absence_timeout: Optional[float] = None
+    eval_interval: Optional[int] = None
+    brightness_threshold: Optional[int] = None
+    cct_threshold: Optional[int] = None
+    nominal_power_watts: Optional[float] = None
+    weather_api_key: Optional[str] = None
+    weather_location: Optional[str] = None
+
 
 def create_app(app_state: dict) -> FastAPI:
     """Create the FastAPI application with references to shared state.
@@ -148,14 +159,51 @@ def create_app(app_state: dict) -> FastAPI:
             logger.info("Mode changed: %s → %s", old_mode, req.mode)
 
             engine = app_state.get("adaptive_engine")
-            if engine:
-                if req.mode == "ai":
+
+            if req.mode == "ai":
+                # Lazy-create engine if it doesn't exist yet
+                if engine is None:
+                    from .adaptive_engine import AdaptiveEngine
+                    engine = AdaptiveEngine(
+                        app_state["lamp"],
+                        app_state["lamp_lock"],
+                        settings=app_state.get("settings"),
+                    )
+
+                    # Wire up the telemetry callback
+                    from .main import build_row, record_decision
+                    telem = app_state.get("telem")
                     reader = app_state["reader"]
-                    if not engine._models_loaded:
-                        engine.load_models() or engine.train_from_baseline()
-                    engine.start(reader)
-                else:
-                    engine.stop()
+                    runtime_tracker = app_state["runtime_tracker"]
+                    lamp = app_state["lamp"]
+
+                    def on_adaptive_action(action_str, reason_str, rationale_str="", context=None):
+                        snap = reader.snapshot()
+                        if telem:
+                            telem.log_row(build_row(
+                                mode=app_state["mode"], snap=snap, lamp=lamp,
+                                runtime_tracker=runtime_tracker,
+                                action=action_str, reason=reason_str,
+                                rationale=rationale_str,
+                                circadian_phase=context.get("circadian_phase", "") if context else "",
+                                weather_context=context.get("weather", "") if context else "",
+                            ))
+                        record_decision(
+                            action=action_str, reason=reason_str,
+                            rationale=rationale_str, snap=snap,
+                            mode=app_state["mode"],
+                            context=context,
+                        )
+
+                    engine.on_action = on_adaptive_action
+                    app_state["adaptive_engine"] = engine
+
+                reader = app_state["reader"]
+                if not engine._models_loaded:
+                    engine.load_models() or engine.train_from_baseline()
+                engine.start(reader)
+            elif engine:
+                engine.stop()
 
         if req.auto is not None:
             app_state["auto"] = req.auto
@@ -163,15 +211,41 @@ def create_app(app_state: dict) -> FastAPI:
 
         return {"mode": app_state["mode"], "auto": app_state["auto"]}
 
-    # ---- Config ----
+    # ---- Config / Settings ----
 
     @app.post("/api/config/power")
     async def set_power(req: PowerRequest):
-        app_state["nominal_power_watts"] = req.nominal_power_watts
-        engine = app_state.get("adaptive_engine")
-        if engine:
-            engine.nominal_power_watts = req.nominal_power_watts
+        settings = app_state.get("settings")
+        if settings:
+            settings.update({"nominal_power_watts": req.nominal_power_watts})
+            app_state["nominal_power_watts"] = req.nominal_power_watts
+        else:
+            app_state["nominal_power_watts"] = req.nominal_power_watts
         return {"ok": True, "nominal_power_watts": req.nominal_power_watts}
+
+    @app.get("/api/settings")
+    async def get_settings():
+        settings = app_state.get("settings")
+        if not settings:
+            return JSONResponse({"error": "Settings not available"}, status_code=500)
+        return settings.to_dict()
+
+    @app.post("/api/settings")
+    async def update_settings(req: SettingsRequest):
+        settings = app_state.get("settings")
+        if not settings:
+            return JSONResponse({"error": "Settings not available"}, status_code=500)
+        req_data = req.model_dump() if hasattr(req, 'model_dump') else req.dict()
+        partial = {k: v for k, v in req_data.items() if v is not None}
+        if not partial:
+            return settings.to_dict()
+        try:
+            new_state = settings.update(partial)
+            # Keep nominal_power_watts in sync with app_state
+            app_state["nominal_power_watts"] = settings.nominal_power_watts
+            return {"ok": True, "settings": new_state}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     # ---- Telemetry ----
 

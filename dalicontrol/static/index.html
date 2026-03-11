@@ -11,22 +11,36 @@
   <!-- Header -->
   <header>
     <h1>KoL Lighting Control</h1>
-    <div class="header-controls">
-      <div class="mode-select">
-        <label>Mode:</label>
-        <select id="modeSelect">
-          <option value="baseline">Baseline</option>
-          <option value="ai">AI Adaptive</option>
-        </select>
-      </div>
-      <div class="auto-toggle">
-        <label>
-          <input type="checkbox" id="autoToggle"> Auto Occupancy
-        </label>
-      </div>
-      <span id="connStatus" class="conn-status disconnected">Disconnected</span>
-    </div>
+    <span id="connStatus" class="conn-status disconnected">Disconnected</span>
   </header>
+
+  <!-- System Controls Bar -->
+  <div class="system-controls">
+    <div class="mode-toggle" id="modeToggle">
+      <button class="mode-btn active" data-mode="baseline">
+        <span class="mode-label">Baseline</span>
+        <small>Manual + auto rules</small>
+      </button>
+      <button class="mode-btn" data-mode="ai">
+        <span class="mode-label">AI Adaptive</span>
+        <small>ML-driven control</small>
+      </button>
+    </div>
+
+    <div class="auto-card" id="autoCard">
+      <div class="auto-info">
+        <span class="auto-title">Auto Occupancy</span>
+        <span class="auto-desc" id="autoDesc">Lights respond to presence sensor</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="autoToggle">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toastContainer" class="toast-container"></div>
 
   <main>
     <!-- Top row: Status + Controls -->
@@ -113,14 +127,6 @@
           <button id="onBtn" class="btn btn-on">ON</button>
           <button id="offBtn" class="btn btn-off">OFF</button>
         </div>
-
-        <div class="control-group">
-          <label for="powerInput">Nominal Power (W):</label>
-          <div class="inline-control">
-            <input type="number" id="powerInput" value="40" min="1" max="500" step="1">
-            <button id="powerBtn" class="btn btn-sm">Set</button>
-          </div>
-        </div>
       </section>
     </div>
 
@@ -167,8 +173,69 @@
       <div class="decision-latest" id="latestDecision">
         <span class="decision-time"></span>
         <span class="decision-rationale">Waiting for first decision...</span>
+        <div class="decision-badges" id="latestBadges"></div>
       </div>
       <div class="decision-log" id="decisionLog"></div>
+    </section>
+
+    <!-- Settings Panel (collapsible) -->
+    <section class="panel settings-panel" id="settingsPanel">
+      <div class="settings-header" id="settingsToggle">
+        <h2>Settings</h2>
+        <span class="collapse-icon" id="collapseIcon">&#9654;</span>
+      </div>
+      <div class="settings-body collapsed" id="settingsBody">
+        <div class="settings-grid">
+          <div class="setting-group">
+            <label for="sDimDelay">Dim Delay (seconds)</label>
+            <small>Time at dim level before turning off</small>
+            <input type="number" id="sDimDelay" min="5" max="600" step="1">
+          </div>
+          <div class="setting-group">
+            <label for="sDimLevel">Dim Level (%)</label>
+            <small>Warning brightness before shutdown</small>
+            <input type="number" id="sDimLevel" min="1" max="50" step="1">
+          </div>
+          <div class="setting-group">
+            <label for="sAbsenceTimeout">Absence Timeout (seconds)</label>
+            <small>Time before AI turns off on vacancy</small>
+            <input type="number" id="sAbsenceTimeout" min="5" max="600" step="1">
+          </div>
+          <div class="setting-group">
+            <label for="sEvalInterval">AI Eval Interval (seconds)</label>
+            <small>Time between AI brightness/CCT evaluations</small>
+            <input type="number" id="sEvalInterval" min="30" max="3600" step="10">
+          </div>
+          <div class="setting-group">
+            <label for="sBrightnessThreshold">Brightness Threshold (%)</label>
+            <small>Minimum change to trigger adjustment</small>
+            <input type="number" id="sBrightnessThreshold" min="1" max="50" step="1">
+          </div>
+          <div class="setting-group">
+            <label for="sCctThreshold">CCT Threshold (K)</label>
+            <small>Minimum Kelvin change to trigger adjustment</small>
+            <input type="number" id="sCctThreshold" min="10" max="1000" step="10">
+          </div>
+          <div class="setting-group">
+            <label for="sNominalPower">Nominal Power (W)</label>
+            <small>Luminaire power for energy estimation</small>
+            <input type="number" id="sNominalPower" min="1" max="500" step="1">
+          </div>
+          <div class="setting-group">
+            <label for="sWeatherApiKey">Weather API Key</label>
+            <small>OpenWeatherMap API key (optional)</small>
+            <input type="text" id="sWeatherApiKey" placeholder="Enter API key...">
+          </div>
+          <div class="setting-group">
+            <label for="sWeatherLocation">Weather Location</label>
+            <small>City name or lat,lon for weather data</small>
+            <input type="text" id="sWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button id="settingsSaveBtn" class="btn btn-save">Save Settings</button>
+        </div>
+      </div>
     </section>
   </main>
 

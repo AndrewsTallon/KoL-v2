@@ -39,29 +39,6 @@ header h1 {
   font-weight: 600;
 }
 
-.header-controls {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.mode-select select,
-.chart-controls select {
-  background: var(--card);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 4px 8px;
-  border-radius: var(--radius);
-  cursor: pointer;
-}
-
-.auto-toggle label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
 .conn-status {
   padding: 4px 10px;
   border-radius: 12px;
@@ -71,6 +48,186 @@ header h1 {
 
 .conn-status.connected { background: var(--green); color: #000; }
 .conn-status.disconnected { background: var(--red); color: #fff; }
+
+/* System Controls Bar */
+.system-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: 14px 24px;
+  background: linear-gradient(180deg, var(--panel) 0%, var(--bg) 100%);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Mode Toggle Buttons */
+.mode-toggle {
+  display: flex;
+  background: var(--card);
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 150px;
+}
+
+.mode-btn small {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.mode-btn .mode-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.mode-btn:hover {
+  background: rgba(233, 69, 96, 0.1);
+  color: var(--text);
+}
+
+.mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-btn.active small {
+  opacity: 0.9;
+}
+
+.mode-btn.loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.mode-btn.loading .mode-label::after {
+  content: '...';
+  animation: dots 1s infinite;
+}
+
+@keyframes dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+
+/* Auto Occupancy Card */
+.auto-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 18px;
+}
+
+.auto-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.auto-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.auto-desc {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 48px;
+  height: 26px;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--border);
+  border-radius: 26px;
+  transition: all 0.3s ease;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  left: 3px;
+  bottom: 3px;
+  background: var(--text);
+  border-radius: 50%;
+  transition: transform 0.3s ease;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: var(--green);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(22px);
+}
+
+/* Toast Notifications */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #fff;
+  opacity: 0;
+  transform: translateX(100%);
+  transition: all 0.3s ease;
+  max-width: 350px;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.toast.hide {
+  opacity: 0;
+  transform: translateX(100%);
+}
+
+.toast-success { background: var(--green); color: #000; }
+.toast-error { background: var(--red); }
+.toast-info { background: var(--card); border: 1px solid var(--border); }
 
 /* Main Layout */
 main {
@@ -193,6 +350,8 @@ input[type="range"] {
 .btn-off { background: var(--red); color: #fff; }
 .btn-off:hover { background: #e57373; }
 .btn-sm { padding: 4px 10px; font-size: 0.8rem; }
+.btn-save { background: var(--green); color: #000; font-weight: 600; padding: 8px 24px; }
+.btn-save:hover { background: #81c784; }
 
 .power-buttons {
   display: flex;
@@ -212,13 +371,20 @@ input[type="range"] {
   align-items: center;
 }
 
-input[type="number"] {
+input[type="number"],
+input[type="text"] {
   background: var(--card);
   color: var(--text);
   border: 1px solid var(--border);
   padding: 4px 8px;
   border-radius: var(--radius);
-  width: 80px;
+  width: 100%;
+}
+
+input[type="number"]:focus,
+input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* Charts */
@@ -235,6 +401,15 @@ input[type="number"] {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.chart-controls select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
 }
 
 .charts-grid {
@@ -282,7 +457,7 @@ canvas { width: 100% !important; height: 100% !important; }
   background: var(--card);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius);
-  padding: 10px 14px;
+  padding: 12px 16px;
   margin-bottom: 10px;
 }
 
@@ -290,12 +465,46 @@ canvas { width: 100% !important; height: 100% !important; }
   display: block;
   font-size: 0.75rem;
   color: var(--text-dim);
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
 .decision-latest .decision-rationale {
   font-size: 0.95rem;
   color: var(--text);
+  line-height: 1.4;
+}
+
+.decision-badges {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.context-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.context-circadian {
+  background: rgba(255, 167, 38, 0.2);
+  color: var(--warm);
+  border: 1px solid rgba(255, 167, 38, 0.3);
+}
+
+.context-weather {
+  background: rgba(66, 165, 245, 0.2);
+  color: var(--cool);
+  border: 1px solid rgba(66, 165, 245, 0.3);
+}
+
+.context-model {
+  background: rgba(233, 69, 96, 0.2);
+  color: var(--accent);
+  border: 1px solid rgba(233, 69, 96, 0.3);
 }
 
 .decision-log {
@@ -336,6 +545,14 @@ canvas { width: 100% !important; height: 100% !important; }
   font-size: 0.85rem;
   color: var(--text);
   flex: 1;
+  line-height: 1.4;
+}
+
+.decision-entry .de-badges {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .decision-entry .de-mode {
@@ -344,10 +561,83 @@ canvas { width: 100% !important; height: 100% !important; }
   text-transform: uppercase;
 }
 
+/* Settings Panel */
+.settings-panel {
+  overflow: hidden;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-header h2 {
+  margin-bottom: 0;
+}
+
+.collapse-icon {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  transition: transform 0.2s ease;
+}
+
+.settings-body {
+  overflow: hidden;
+  max-height: 1000px;
+  transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+  opacity: 1;
+  padding-top: 16px;
+}
+
+.settings-body.collapsed {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.setting-group label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.setting-group small {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.setting-group input {
+  max-width: 200px;
+}
+
+.settings-actions {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .top-row { grid-template-columns: 1fr; }
   .status-grid { grid-template-columns: 1fr; }
   .charts-grid { grid-template-columns: 1fr; }
   .chart-container.full-width { grid-column: span 1; }
+  .system-controls { flex-direction: column; gap: 12px; }
+  .settings-grid { grid-template-columns: 1fr; }
 }
