@@ -81,8 +81,10 @@ class AdaptiveEngine:
         self._weather_cache_time: float = 0.0
         self._weather_cache_ttl: float = 1800.0  # 30 minutes
 
-        # Prediction source tracking for decision logging
-        self._prediction_source: str = "fallback"
+        # Prediction source tracking for decision logging (split by channel)
+        self._brightness_source: str = "fallback"
+        self._cct_source: str = "circadian"
+        self._prediction_source: str = "fallback / circadian"  # backward compat
 
         # Callback for telemetry logging
         self.on_action = None  # callable(action_str, reason_str, rationale_str, context)
@@ -244,8 +246,15 @@ class AdaptiveEngine:
     def predict(self, lux: float, hour: Optional[float] = None) -> Tuple[float, int]:
         """Predict recommended brightness (%) and CCT (Kelvin).
 
-        Priority: ML models (if trained) blended with user preferences,
+        Brightness: ML models (if trained) blended with user preferences,
         then user preferences alone, then generic fallback heuristics.
+
+        CCT: Circadian rhythm is always the primary driver.  User
+        preferences (questionnaire) act as a mild nudge on top of the
+        circadian base — they sharpen the curve, not replace it.
+        ML CCT predictions are intentionally ignored because the
+        training data was collected without user interaction, so the
+        model learned a static value rather than true preference.
         """
         if hour is None:
             now = datetime.now()
@@ -256,35 +265,44 @@ class AdaptiveEngine:
 
         prefs = self.preferences
 
-        if self._models_loaded and self._brightness_model and self._cct_model:
+        # === BRIGHTNESS: ML-first (unchanged behaviour) ===
+        if self._models_loaded and self._brightness_model:
             X = [[hour_sin, hour_cos, lux]]
             ml_brightness = float(self._brightness_model.predict(X)[0])
-            ml_cct = int(round(self._cct_model.predict(X)[0]))
 
             if prefs and prefs.completed:
-                # Blend ML predictions with user preferences (70% ML, 30% prefs)
                 pref_brightness = prefs.get_preferred_brightness(hour)
-                pref_cct = prefs.get_preferred_cct(hour)
                 brightness_pct = 0.7 * ml_brightness + 0.3 * pref_brightness
-                cct_kelvin = int(round(0.7 * ml_cct + 0.3 * pref_cct))
-                self._prediction_source = "ML + preferences"
+                self._brightness_source = "ML + preferences"
             else:
                 brightness_pct = ml_brightness
-                cct_kelvin = ml_cct
-                self._prediction_source = "ML"
+                self._brightness_source = "ML"
         elif prefs and prefs.completed:
-            # No ML models yet — use preferences as primary source
             brightness_pct = prefs.get_preferred_brightness(hour)
-            cct_kelvin = prefs.get_preferred_cct(hour)
-            # Still factor in ambient light for brightness
             lux_factor = self._fallback_brightness(lux) / 100.0
             brightness_pct = brightness_pct * lux_factor + brightness_pct * (1 - lux_factor) * 0.5
             brightness_pct = max(brightness_pct, 10.0)
-            self._prediction_source = "preferences"
+            self._brightness_source = "preferences"
         else:
             brightness_pct = self._fallback_brightness(lux)
-            cct_kelvin = self._fallback_cct(hour)
-            self._prediction_source = "fallback"
+            self._brightness_source = "fallback"
+
+        # === CCT: Circadian-first ===
+        # The circadian curve is always the foundation for CCT.
+        # User preferences nudge the base (80% circadian, 20% preference)
+        # so the questionnaire sharpens the rhythm without overriding it.
+        circadian_cct = self._fallback_cct(hour)
+
+        if prefs and prefs.completed:
+            pref_cct = prefs.get_preferred_cct(hour)
+            cct_kelvin = int(round(0.8 * circadian_cct + 0.2 * pref_cct))
+            self._cct_source = "circadian + preferences"
+        else:
+            cct_kelvin = circadian_cct
+            self._cct_source = "circadian"
+
+        # Combined source string for backward compatibility
+        self._prediction_source = f"{self._brightness_source} / {self._cct_source}"
 
         brightness_pct = max(5.0, min(100.0, brightness_pct))
         cct_kelvin = max(2700, min(6500, cct_kelvin))
@@ -357,16 +375,12 @@ class AdaptiveEngine:
             # Aligns with circadian
             reason = f"CCT {rec_cct}K aligns with circadian {phase} target ({circadian_target}K) - {benefit}"
         else:
-            # Diverges from circadian (user preferences or ML override)
+            # Diverges slightly from pure circadian due to preference nudge
             if "preferences" in source:
                 reason = (
-                    f"CCT {rec_cct}K set by user preference "
-                    f"(circadian target: {circadian_target}K for {phase})"
-                )
-            elif "ML" in source:
-                reason = (
-                    f"CCT {rec_cct}K from learned pattern "
-                    f"(circadian target: {circadian_target}K for {phase})"
+                    f"CCT {rec_cct}K follows circadian rhythm, "
+                    f"nudged by user preference "
+                    f"(circadian target: {circadian_target}K for {phase}) - {benefit}"
                 )
             else:
                 reason = f"CCT {rec_cct}K ({temp_desc}) for {phase} - {benefit}"
@@ -613,7 +627,8 @@ class AdaptiveEngine:
         circadian_phase = self._circadian_phase(hour)
         circadian_cct_target = self._fallback_cct(hour)
         weather_context = self._get_weather_context(lux, hour)
-        prediction_source = self._prediction_source
+        cct_source = self._cct_source
+        brightness_source = self._brightness_source
         behavior_note = self._behavior_summary(hour)
 
         lux_desc = "bright" if lux > 300 else "moderate" if lux > 100 else "dim"
@@ -627,7 +642,7 @@ class AdaptiveEngine:
 
         # CCT reasoning: explain why this temperature was chosen
         cct_reasoning = self._build_cct_reasoning(
-            rec_cct, circadian_cct_target, circadian_phase, hour, prediction_source
+            rec_cct, circadian_cct_target, circadian_phase, hour, cct_source
         )
 
         context = {
@@ -637,7 +652,7 @@ class AdaptiveEngine:
             "weather": weather_context,
             "lux": round(lux, 1),
             "lux_desc": lux_desc,
-            "model_type": prediction_source,
+            "model_type": f"brightness: {brightness_source}, cct: {cct_source}",
             "rec_brightness": round(rec_brightness, 1),
             "rec_cct": rec_cct,
             "brightness_delta": round(brightness_delta, 1),
