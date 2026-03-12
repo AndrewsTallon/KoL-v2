@@ -4,9 +4,11 @@ from typing import Optional, Tuple
 from .dali_transport import DaliHidTransport
 from .dali_controls import DaliControls, pct_to_level, clamp
 
-# Your captured endpoints:
-WARM_PRESET = (0x10, 0x27)  # "yellow"
-COOL_PRESET = (0x32, 0x00)  # "white"
+# Mirek-encoded presets (DTR0, DTR1):
+#   Warm: 370 Mirek ≈ 2703 K → DTR0=0x72, DTR1=0x01
+#   Cool: 154 Mirek ≈ 6494 K → DTR0=0x9A, DTR1=0x00
+WARM_PRESET = (0x72, 0x01)  # "yellow"
+COOL_PRESET = (0x9A, 0x00)  # "white"
 
 @dataclass
 class LampState:
@@ -52,11 +54,17 @@ class LampController:
         self.ctrl.dt8_set_temp_raw(*WARM_PRESET)
         self.state.last_temp = WARM_PRESET
 
-    def set_temp_raw(self, dtr: int, dtr1: int):
-        dtr = clamp(int(dtr), 0, 255)
+    def set_temp_raw(self, dtr0: int, dtr1: int):
+        dtr0 = clamp(int(dtr0), 0, 255)
         dtr1 = clamp(int(dtr1), 0, 255)
-        self.ctrl.dt8_set_temp_raw(dtr, dtr1)
-        self.state.last_temp = (dtr, dtr1)
+        self.ctrl.dt8_set_temp_raw(dtr0, dtr1)
+        self.state.last_temp = (dtr0, dtr1)
+
+    def set_temp_kelvin(self, kelvin: int):
+        self.ctrl.dt8_set_kelvin(kelvin)
+        from .dali_controls import kelvin_to_dtr
+        dtr0, dtr1 = kelvin_to_dtr(kelvin)
+        self.state.last_temp = (dtr0, dtr1)
 
     # -------- Power ----------
     def off(self):
@@ -70,8 +78,8 @@ class LampController:
         If you want the light to come back at exactly last level, this uses DIRECT ARC POWER.
         """
         # If you want, you can re-apply temp on power-on. It’s safe for your use case.
-        dtr, dtr1 = self.state.last_temp
-        self.ctrl.dt8_set_temp_raw(dtr, dtr1)
+        dtr0, dtr1 = self.state.last_temp
+        self.ctrl.dt8_set_temp_raw(dtr0, dtr1)
 
         # Restore last brightness; if last_level==0, choose a default (e.g., 50%)
         level = self.state.last_level
