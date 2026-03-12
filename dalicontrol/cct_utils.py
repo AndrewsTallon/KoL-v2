@@ -1,54 +1,48 @@
 """
-CCT Kelvin ↔ DALI DTR/DTR1 mapping utility.
+CCT Kelvin ↔ DALI DTR0/DTR1 mapping utility.
 
-The luminaire uses raw DTR/DTR1 bytes for DT8 tunable-white control.
-This module provides conversion between human-readable Kelvin values
-and the hardware register values.
+The luminaire uses Mirek (reciprocal megakelvin) encoding for DT8
+tunable-white control.  The 16-bit Mirek value is split across two
+data-transfer registers:
 
-Known calibration points (from lamp_state.py):
-  WARM_PRESET = (0x10, 0x27)  →  ~2700 K
-  COOL_PRESET = (0x32, 0x00)  →  ~6500 K
+    DTR0 = Mirek & 0xFF          (LSB)
+    DTR1 = (Mirek >> 8) & 0xFF   (MSB)
+
+Conversion:
+    Mirek  = 1,000,000 / Kelvin
+    Kelvin = 1,000,000 / Mirek
 """
 
 from typing import Tuple
 
-# Calibration endpoints
-WARM_K = 2700
-COOL_K = 6500
-
-WARM_DTR = 0x10   # 16
-WARM_DTR1 = 0x27  # 39
-COOL_DTR = 0x32   # 50
-COOL_DTR1 = 0x00  # 0
+# Lamp range (same constants as dali_controls.py)
+MIREK_WARMEST = 370   # ≈ 2703 K
+MIREK_COOLEST = 154   # ≈ 6494 K
 
 
 def kelvin_to_dtr(kelvin: int) -> Tuple[int, int]:
-    """Convert a CCT value in Kelvin to (DTR, DTR1) register values.
+    """Convert a CCT value in Kelvin to (DTR0, DTR1) register values.
 
-    Linearly interpolates between warm (2700K) and cool (6500K) endpoints.
-    Values outside range are clamped.
+    Uses Mirek encoding: Mirek = 1,000,000 / Kelvin, clamped to lamp range,
+    then split into LSB/MSB.
     """
-    kelvin = max(WARM_K, min(COOL_K, int(kelvin)))
-    t = (kelvin - WARM_K) / (COOL_K - WARM_K)  # 0.0=warm, 1.0=cool
-
-    dtr = int(round(WARM_DTR + t * (COOL_DTR - WARM_DTR)))
-    dtr1 = int(round(WARM_DTR1 + t * (COOL_DTR1 - WARM_DTR1)))
-
-    dtr = max(0, min(255, dtr))
-    dtr1 = max(0, min(255, dtr1))
-    return (dtr, dtr1)
+    kelvin = max(1000, min(20000, int(kelvin)))
+    mirek = int(round(1_000_000 / kelvin))
+    mirek = max(MIREK_COOLEST, min(MIREK_WARMEST, mirek))
+    dtr0 = mirek & 0xFF
+    dtr1 = (mirek >> 8) & 0xFF
+    return (dtr0, dtr1)
 
 
-def dtr_to_kelvin(dtr: int, dtr1: int) -> int:
-    """Convert (DTR, DTR1) register values back to approximate CCT in Kelvin.
+def dtr_to_kelvin(dtr0: int, dtr1: int) -> int:
+    """Convert (DTR0, DTR1) register values back to CCT in Kelvin.
 
-    Uses DTR as the primary interpolation axis since it has the wider range.
+    Reconstructs the 16-bit Mirek value and converts to Kelvin.
     """
-    if COOL_DTR == WARM_DTR:
-        return WARM_K
-    t = (dtr - WARM_DTR) / (COOL_DTR - WARM_DTR)
-    t = max(0.0, min(1.0, t))
-    return int(round(WARM_K + t * (COOL_K - WARM_K)))
+    mirek = ((dtr1 & 0xFF) << 8) | (dtr0 & 0xFF)
+    if mirek == 0:
+        return 0
+    return int(round(1_000_000 / mirek))
 
 
 def level_to_pct(level: int) -> float:

@@ -24,8 +24,11 @@ class NullControls:
     def set_arc_level(self, level: int):
         logging.info("[dry-run] set_arc_level(%s)", level)
 
-    def dt8_set_temp_raw(self, dtr: int, dtr1: int):
-        logging.info("[dry-run] dt8_set_temp_raw(%s, %s)", dtr, dtr1)
+    def dt8_set_temp_raw(self, dtr0: int, dtr1: int):
+        logging.info("[dry-run] dt8_set_temp_raw(%s, %s)", dtr0, dtr1)
+
+    def dt8_set_kelvin(self, kelvin: int):
+        logging.info("[dry-run] dt8_set_kelvin(%s)", kelvin)
 
 
 def load_state(path: Path = STATE_PATH) -> LampState:
