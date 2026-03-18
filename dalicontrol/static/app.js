@@ -386,15 +386,21 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
   btn.onclick = async () => {
     const mode = btn.dataset.mode;
     btn.classList.add('loading');
-    const result = await apiPost('/api/mode', { mode });
-    if (result) {
-      syncModeButtons(mode);
-      showToast(`Switched to ${mode === 'ai' ? 'AI Adaptive' : 'Manual'} mode`, 'success');
-      // On first AI activation, check if preferences are completed
-      if (mode === 'ai') {
-        checkPreferencesOnAiActivation();
+    try {
+      const result = await apiPost('/api/mode', { mode });
+      if (result) {
+        syncModeButtons(mode);
+        showToast(`Switched to ${mode === 'ai' ? 'AI Adaptive' : 'Manual'} mode`, 'success');
+        // On first AI activation, check if preferences are completed
+        if (mode === 'ai') {
+          checkPreferencesOnAiActivation();
+        }
+      } else {
+        btn.classList.remove('loading');
+        showToast('Failed to switch mode', 'error');
       }
-    } else {
+    } catch (err) {
+      console.error('Mode switch error:', err);
       btn.classList.remove('loading');
       showToast('Failed to switch mode', 'error');
     }
