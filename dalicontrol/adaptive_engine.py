@@ -2,7 +2,12 @@
 AI-based adaptive lighting control engine.
 
 Implements the thesis Section 3.3.2 control strategy:
-- Learns user preferences from baseline telemetry CSV data
+- Uses circadian rhythm and ambient lux as the primary brightness driver
+  (target desk illuminance minus ambient contribution)
+- ML models learn time-of-day usage *patterns* (not user preferences)
+  and act as a secondary refinement layer (20% nudge)
+- User preferences from the questionnaire provide a mild nudge (20%)
+- CCT follows circadian rhythm with optional preference nudge
 - Evaluates lighting adjustments every 5 minutes (configurable)
 - Applies brightness/CCT thresholds to prevent micro-adjustments
 - Handles occupancy-based switching with dim-then-off pattern
@@ -14,6 +19,7 @@ import logging
 import math
 import threading
 import time
+import urllib.parse
 import urllib.request
 import json as _json
 from datetime import datetime
@@ -31,7 +37,13 @@ _MAX_BEHAVIOR_HISTORY = 500
 
 
 class AdaptiveEngine:
-    """AI adaptive control that learns from baseline data and adjusts lighting."""
+    """AI adaptive control using circadian rhythm + lux as the primary driver.
+
+    Brightness is computed from a circadian-aware target desk illuminance
+    (e.g. 500 lux midday, 200 lux evening) minus ambient contribution,
+    then optionally nudged by ML patterns and user preferences.
+    ML learns time-of-day *patterns*, not user preferences.
+    """
 
     # Fallback class-level defaults (used if no settings object provided)
     EVAL_INTERVAL = 300
@@ -118,7 +130,14 @@ class AdaptiveEngine:
     # ---- Training ----
 
     def train_from_baseline(self, csv_paths: Optional[list] = None) -> bool:
-        """Train ML models from baseline telemetry CSV files."""
+        """Train ML models from baseline telemetry CSV files.
+
+        The models learn time-of-day usage *patterns* (correlations
+        between hour, ambient lux, and lamp settings) — NOT user
+        preferences.  Brightness predictions from these models are
+        used as a secondary refinement (20% nudge) on top of the
+        circadian + lux base, not as the primary driver.
+        """
         if csv_paths is None:
             # Accept both legacy "baseline" and new "manual" CSV files
             csv_paths = sorted(
@@ -175,9 +194,14 @@ class AdaptiveEngine:
         return True
 
     def load_models(self) -> bool:
-        """Load previously trained models from disk."""
+        """Load previously trained models from disk.
+
+        Validates that loaded objects are RandomForestRegressor instances
+        to mitigate insecure deserialization risks with joblib/pickle.
+        """
         try:
             import joblib
+            from sklearn.ensemble import RandomForestRegressor
         except ImportError:
             return False
 
@@ -188,8 +212,19 @@ class AdaptiveEngine:
             return False
 
         try:
-            self._brightness_model = joblib.load(brightness_path)
-            self._cct_model = joblib.load(cct_path)
+            brightness_model = joblib.load(brightness_path)
+            cct_model = joblib.load(cct_path)
+
+            # Validate deserialized types to prevent arbitrary code execution
+            if not isinstance(brightness_model, RandomForestRegressor):
+                logger.warning("Brightness model is not a RandomForestRegressor, rejecting.")
+                return False
+            if not isinstance(cct_model, RandomForestRegressor):
+                logger.warning("CCT model is not a RandomForestRegressor, rejecting.")
+                return False
+
+            self._brightness_model = brightness_model
+            self._cct_model = cct_model
             self._models_loaded = True
             logger.info("Loaded pre-trained adaptive models.")
             return True
@@ -198,7 +233,12 @@ class AdaptiveEngine:
             return False
 
     def _load_csv_data(self, csv_path, features, brightness_targets, cct_targets):
-        """Extract training samples from a single baseline CSV."""
+        """Extract pattern samples from a single baseline CSV.
+
+        Each sample captures the correlation between time-of-day,
+        ambient lux, and the lamp setting at that moment.  These are
+        *usage patterns*, not explicit user preferences.
+        """
         with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -246,8 +286,15 @@ class AdaptiveEngine:
     def predict(self, lux: float, hour: Optional[float] = None) -> Tuple[float, int]:
         """Predict recommended brightness (%) and CCT (Kelvin).
 
-        Brightness: ML models (if trained) blended with user preferences,
-        then user preferences alone, then generic fallback heuristics.
+        Brightness: Circadian rhythm + ambient lux is always the primary
+        driver.  A comfortable target desk illuminance varies by time of
+        day (higher during work hours, lower at night).  The system
+        calculates how much artificial light is needed to reach the
+        target given the measured ambient lux.
+
+        ML patterns and user preferences each contribute a 20% nudge on
+        top of the circadian+lux base — they refine the curve without
+        overriding it.
 
         CCT: Circadian rhythm is always the primary driver.  User
         preferences (questionnaire) act as a mild nudge on top of the
@@ -265,27 +312,31 @@ class AdaptiveEngine:
 
         prefs = self.preferences
 
-        # === BRIGHTNESS: ML-first (unchanged behaviour) ===
+        # === BRIGHTNESS: Circadian + lux first ===
+        # The circadian brightness curve is always the foundation.
+        # It computes a comfortable brightness given time-of-day and
+        # ambient lux (more daylight -> less artificial light needed).
+        base_brightness = self._circadian_brightness(lux, hour)
+        self._brightness_source = "circadian + lux"
+
+        # ML pattern nudge (20%): ML learns time-of-day usage patterns
+        # from baseline telemetry, NOT user preferences.
+        ml_nudge = 0.0
         if self._models_loaded and self._brightness_model:
             X = [[hour_sin, hour_cos, lux]]
             ml_brightness = float(self._brightness_model.predict(X)[0])
+            ml_nudge = 0.2 * (ml_brightness - base_brightness)
+            self._brightness_source = "circadian + lux + patterns"
 
-            if prefs and prefs.completed:
-                pref_brightness = prefs.get_preferred_brightness(hour)
-                brightness_pct = 0.7 * ml_brightness + 0.3 * pref_brightness
-                self._brightness_source = "ML + preferences"
-            else:
-                brightness_pct = ml_brightness
-                self._brightness_source = "ML"
-        elif prefs and prefs.completed:
-            brightness_pct = prefs.get_preferred_brightness(hour)
-            lux_factor = self._fallback_brightness(lux) / 100.0
-            brightness_pct = brightness_pct * lux_factor + brightness_pct * (1 - lux_factor) * 0.5
-            brightness_pct = max(brightness_pct, 10.0)
-            self._brightness_source = "preferences"
-        else:
-            brightness_pct = self._fallback_brightness(lux)
-            self._brightness_source = "fallback"
+        # User preference nudge (20%): questionnaire values refine
+        # the circadian base without overriding it.
+        pref_nudge = 0.0
+        if prefs and prefs.completed:
+            pref_brightness = prefs.get_preferred_brightness(hour)
+            pref_nudge = 0.2 * (pref_brightness - base_brightness)
+            self._brightness_source += " + preferences"
+
+        brightness_pct = base_brightness + ml_nudge + pref_nudge
 
         # === CCT: Circadian-first ===
         # The circadian curve is always the foundation for CCT.
@@ -309,8 +360,75 @@ class AdaptiveEngine:
 
         return brightness_pct, cct_kelvin
 
+    # ---- Circadian brightness (primary driver) ----
+
+    # Target desk illuminance by time of day (lux).  The system
+    # calculates what percentage of artificial light is needed to
+    # bridge the gap between ambient lux and this target.
+    _TARGET_LUX_SCHEDULE = {
+        # (start_hour, end_hour): target_desk_lux
+        (0, 7): 150,       # Night / pre-dawn: low, melatonin-friendly
+        (7, 9): 350,       # Morning warm-up: moderate
+        (9, 12): 500,      # Late morning focus: full task lighting
+        (12, 14): 500,     # Midday: full task lighting
+        (14, 17): 450,     # Afternoon: still productive
+        (17, 19): 300,     # Early evening: winding down
+        (19, 21): 200,     # Evening: relaxed
+        (21, 24): 150,     # Night: low
+    }
+
+    def _target_desk_lux(self, hour: float) -> float:
+        """Comfortable target desk illuminance for the given hour.
+
+        Uses smooth linear interpolation between schedule breakpoints
+        to avoid abrupt jumps.
+        """
+        # Build sorted breakpoints from schedule midpoints
+        breakpoints = []  # (hour, lux)
+        for (start, end), target in sorted(self._TARGET_LUX_SCHEDULE.items()):
+            mid = (start + end) / 2.0
+            breakpoints.append((mid, target))
+
+        # Wrap-around: duplicate first point at +24 and last at -24
+        breakpoints_ext = (
+            [(h - 24, lx) for h, lx in breakpoints]
+            + breakpoints
+            + [(h + 24, lx) for h, lx in breakpoints]
+        )
+
+        # Find surrounding breakpoints and interpolate
+        for i in range(len(breakpoints_ext) - 1):
+            h0, l0 = breakpoints_ext[i]
+            h1, l1 = breakpoints_ext[i + 1]
+            if h0 <= hour < h1:
+                t = (hour - h0) / (h1 - h0)
+                return l0 + t * (l1 - l0)
+
+        # Fallback (shouldn't happen)
+        return 350.0
+
+    def _circadian_brightness(self, lux: float, hour: float) -> float:
+        """Compute brightness % from circadian target lux and ambient lux.
+
+        The idea: the lamp should supply enough light so that
+        ambient + artificial ≈ target desk illuminance.
+        If ambient already exceeds the target, dim to a minimum.
+        """
+        target = self._target_desk_lux(hour)
+        deficit = target - lux
+
+        if deficit <= 0:
+            # Ambient light already exceeds target — minimal artificial
+            return max(10.0, 20.0 * (target / max(lux, 1.0)))
+
+        # Map deficit to brightness %.  At full deficit (lux=0)
+        # the lamp runs at 100%.  The relationship is linear
+        # with respect to the target.
+        brightness = (deficit / target) * 100.0
+        return max(10.0, min(100.0, brightness))
+
     def _fallback_brightness(self, lux: float) -> float:
-        """Inverse relationship: more daylight -> less artificial light."""
+        """Simple inverse relationship (legacy, used as sanity reference)."""
         if lux >= 500:
             return 20.0
         elif lux >= 300:
@@ -412,12 +530,12 @@ class AdaptiveEngine:
             return self._weather_cache
 
         try:
-            url = (
-                f"https://api.openweathermap.org/data/2.5/weather"
-                f"?q={urllib.request.quote(location)}"
-                f"&appid={urllib.request.quote(api_key)}"
-                f"&units=metric"
-            )
+            params = urllib.parse.urlencode({
+                "q": location,
+                "appid": api_key,
+                "units": "metric",
+            })
+            url = f"https://api.openweathermap.org/data/2.5/weather?{params}"
             with urllib.request.urlopen(url, timeout=5) as resp:
                 data = _json.loads(resp.read().decode())
                 weather = data.get("weather", [{}])[0]

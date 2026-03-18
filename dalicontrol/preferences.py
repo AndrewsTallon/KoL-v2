@@ -8,6 +8,7 @@ Thread-safe for concurrent access.
 
 import json
 import logging
+import re
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -89,8 +90,12 @@ class UserPreferences:
                     val = int(val)
                 elif key == "completed":
                     val = bool(val)
-                elif key in ("wake_time", "sleep_time", "work_start", "work_end",
-                             "warm_cool_preference", "change_sensitivity"):
+                elif key in ("wake_time", "sleep_time", "work_start", "work_end"):
+                    val = str(val)
+                    if not self._validate_time(val):
+                        logger.warning("Invalid time format for %s: %r, skipping", key, val)
+                        continue
+                elif key in ("warm_cool_preference", "change_sensitivity"):
                     val = str(val)
 
                 setattr(self, key, val)
@@ -136,11 +141,21 @@ class UserPreferences:
         }
         return mapping.get(self.change_sensitivity, (5, 100))
 
+    _TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+    @classmethod
+    def _validate_time(cls, time_str: str) -> bool:
+        """Return True if time_str matches HH:MM format."""
+        return bool(cls._TIME_RE.match(time_str))
+
     @staticmethod
     def _parse_time(time_str: str) -> float:
         """Parse 'HH:MM' to decimal hours."""
         try:
             parts = time_str.split(":")
-            return int(parts[0]) + int(parts[1]) / 60.0
+            h, m = int(parts[0]), int(parts[1])
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                return 0.0
+            return h + m / 60.0
         except (ValueError, IndexError):
             return 0.0
