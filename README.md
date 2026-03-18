@@ -154,6 +154,31 @@ joblib              # Model persistence
 
 ---
 
+## Security & API Authentication
+
+KoL-v2 includes API key authentication to secure all REST and WebSocket endpoints. This is **disabled by default** for development convenience but should always be enabled before production or shared-network deployment.
+
+### Enabling API Key Authentication
+
+```bash
+# Generate and set a secure API key
+export KOL_API_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# Start the server — all API endpoints now require authentication
+python -m dalicontrol.main --sensor-port /dev/ttyUSB0 --web
+```
+
+When enabled, all `/api/*` endpoints require the `X-API-Key` header. WebSocket connections require a `?token=<key>` query parameter. The dashboard UI and static assets remain accessible without a key.
+
+If `KOL_API_KEY` is not set, the server logs a warning:
+```
+WARNING API key authentication DISABLED. Set KOL_API_KEY env var to secure API endpoints before production deployment.
+```
+
+For full security documentation, data flow diagrams, threat model, and deployment hardening checklist, see **[SECURITY.md](SECURITY.md)**.
+
+---
+
 ## Quick Start
 
 ### 1. Flash the ESP32 Firmware
@@ -260,16 +285,81 @@ python -m dalicontrol.main --sensor-port /dev/ttyUSB0 --auto --mode baseline
 
 ## Web Dashboard
 
-The web dashboard at `http://localhost:8080` provides:
+The web dashboard at `http://localhost:8080` provides a complete interface for monitoring and controlling the lighting system.
+
+### Dashboard Panels
 
 - **Live Status** — Real-time lamp brightness, CCT, occupancy, and ambient light
-- **Manual Controls** — Sliders for brightness (0–100%) and CCT (2700–6500K), ON/OFF buttons
+- **Manual Controls** — Sliders for brightness (0-100%) and CCT (2700-6500K), ON/OFF buttons
 - **Telemetry Charts** — Time-series plots of brightness vs. lux, color temperature, and occupancy
 - **Decision Log** — Scrollable list of the last 50 automated decisions with human-readable rationale
-- **AI Controls** — Model training trigger (visible in AI mode)
+- **AI Controls** — Model training trigger and preferences editor (visible in AI mode)
+- **Settings** — Configurable parameters for dimming, timeouts, thresholds, and weather
 - **Data Export** — Download telemetry CSVs for external analysis
 
 The dashboard updates via WebSocket (5-second intervals) with automatic reconnection.
+
+### User Guide: Switching Between Manual and AI Mode
+
+The **mode toggle** at the top of the dashboard lets you switch between Manual and AI Adaptive control:
+
+1. **Manual Mode** (default) — You have full control over brightness and CCT using the sliders and buttons. The system still tracks occupancy and logs telemetry, but does not make automatic adjustments.
+
+2. **AI Adaptive Mode** — The system uses trained machine learning models to automatically adjust brightness and color temperature based on time of day, ambient light, and your learned preferences. To activate:
+   - Click the **"AI Adaptive"** button in the mode toggle bar
+   - If you haven't configured preferences yet, a 4-step wizard will open automatically
+   - Complete the wizard (schedule, brightness, color temperature, sensitivity preferences)
+   - The AI will begin making adjustments every 5 minutes when the desk is occupied
+
+### User Guide: Configuring Lighting Preferences
+
+The preferences wizard teaches the AI your lighting habits:
+
+1. **Schedule** — Set your wake time, sleep time, work start, and work end
+2. **Brightness** — Set preferred brightness levels for morning, midday, evening, and night
+3. **Color Temperature** — Set warm/cool preferences for each time of day
+4. **Sensitivity** — Choose how aggressively the AI adjusts (low / medium / high)
+
+Access the wizard from:
+- The **"Edit Lighting Preferences"** button in the AI Controls panel
+- The **"Edit Preferences"** button in the Settings panel
+- Automatically on first AI mode activation
+
+### User Guide: Settings Panel
+
+Click the **Settings** header to expand the configuration panel:
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Dim Delay | Seconds at dim level before turning off | 60 |
+| Dim Level | Warning brightness percentage before shutdown | 10% |
+| Absence Timeout | Seconds before AI turns off on vacancy | 300 |
+| AI Eval Interval | Seconds between AI brightness/CCT evaluations | 300 |
+| Brightness Threshold | Minimum % change to trigger adjustment | 5% |
+| CCT Threshold | Minimum Kelvin change to trigger adjustment | 100K |
+| Nominal Power | Luminaire wattage for energy estimation | 40W |
+| Weather API Key | OpenWeatherMap key for weather-aware lighting (optional) |  |
+| Weather Location | City name or lat,lon for weather data |  |
+
+Click **"Save Settings"** to persist changes. Settings survive server restarts.
+
+### User Guide: Understanding the Decision Log
+
+When in AI mode, every automated adjustment is logged with:
+- **Timestamp** and **mode** indicator
+- **Rationale** — A human-readable explanation of why the adjustment was made
+- **Context badges** — Circadian phase (morning/midday/evening/night), weather conditions, and model type
+
+Example rationale entries:
+- "Bright ambient light (420 lux) -> brightness 30%"
+- "Evening phase (19.5h) -> warm white 3200K"
+- "Desk vacant -> dimming to 10% as warning before shutdown"
+
+### User Guide: Telemetry & Data Export
+
+- Use the **run selector** dropdown to switch between live data and historical runs
+- Use the **time window** dropdown to filter chart data (1h, 4h, 8h)
+- Click **"Download CSV"** to export telemetry data for external analysis in Excel, Python, R, etc.
 
 ---
 
@@ -325,6 +415,7 @@ Telemetry is logged to `dalicontrol/telemetry/` as CSV files named `run_YYYYMMDD
 ```
 KoL-v2/
 ├── README.md                          # This file
+├── SECURITY.md                        # Security, compliance, and data flow documentation
 ├── requirements.txt                   # Python dependencies
 ├── current_arduino,txt                # ESP32 firmware source code
 ├── dalicontrol/
@@ -397,6 +488,16 @@ Insufficient training data (N samples). Need at least 10.
 - Confirm `--web` flag is set when launching
 - Check the port isn't already in use: `lsof -i :8080`
 - Try a different port: `--web-port 9090`
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [README.md](README.md) | System overview, setup, usage, and user guide (this file) |
+| [SECURITY.md](SECURITY.md) | Security architecture, data flows, threat model, compliance checklist |
+| [README-build.md](README-build.md) | Windows build, PyInstaller packaging, and installer creation |
 
 ---
 
