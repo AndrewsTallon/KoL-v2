@@ -5,28 +5,81 @@ Provides:
 - REST API for lamp control, mode switching, telemetry access
 - WebSocket for real-time sensor/lamp status streaming
 - Static file serving for the dashboard frontend
+- API key authentication (set KOL_API_KEY env var to enable)
+- Security headers middleware
 """
 
 import asyncio
 import csv
 import json
 import logging
+import os
+import secrets
 import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .cct_utils import dtr_to_kelvin, kelvin_to_dtr, level_to_pct
 from .energy_estimator import estimate_energy
 from .paths import STATIC_DIR, TELEM_DIR
 
 logger = logging.getLogger(__name__)
+
+# API key for authentication.  Set KOL_API_KEY environment variable to
+# enable.  When unset, all endpoints are open (development mode).
+_API_KEY: Optional[str] = os.environ.get("KOL_API_KEY")
+
+
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Inject standard security headers into every HTTP response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' ws: wss:"
+        )
+        return response
+
+
+class _ApiKeyMiddleware(BaseHTTPMiddleware):
+    """Require a valid API key for non-static, non-dashboard requests."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip auth for static assets, dashboard, and docs
+        path = request.url.path
+        if (
+            not _API_KEY
+            or path == "/"
+            or path.startswith("/static")
+            or path.startswith("/api/docs")
+            or path.startswith("/openapi")
+        ):
+            return await call_next(request)
+
+        # Check X-API-Key header
+        provided = request.headers.get("X-API-Key", "")
+        if not secrets.compare_digest(provided, _API_KEY):
+            return JSONResponse(
+                {"error": "Invalid or missing API key"},
+                status_code=401,
+            )
+        return await call_next(request)
 
 
 # --- Pydantic request models ---
@@ -72,6 +125,18 @@ def create_app(app_state: dict) -> FastAPI:
         runtime_tracker: dict  (shared mutable for runtime tracking)
     """
     app = FastAPI(title="KoL Lighting Control", docs_url="/api/docs")
+
+    # Security middleware (order matters — headers first, then auth)
+    app.add_middleware(_SecurityHeadersMiddleware)
+    app.add_middleware(_ApiKeyMiddleware)
+
+    if _API_KEY:
+        logger.info("API key authentication enabled (KOL_API_KEY is set).")
+    else:
+        logger.warning(
+            "API key authentication DISABLED. Set KOL_API_KEY env var "
+            "to secure API endpoints before production deployment."
+        )
 
     # Serve static files (dashboard)
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
@@ -307,7 +372,8 @@ def create_app(app_state: dict) -> FastAPI:
                             continue
                     rows.append(row)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            logger.error("Error reading telemetry data: %s", exc)
+            return JSONResponse({"error": "Failed to read telemetry data"}, status_code=500)
 
         return rows
 
@@ -363,6 +429,12 @@ def create_app(app_state: dict) -> FastAPI:
 
     @app.websocket("/ws/live")
     async def websocket_live(ws: WebSocket):
+        # Validate API key for WebSocket connections if auth is enabled
+        if _API_KEY:
+            token = ws.query_params.get("token", "")
+            if not secrets.compare_digest(token, _API_KEY):
+                await ws.close(code=4001, reason="Invalid or missing API key")
+                return
         await ws.accept()
         logger.info("WebSocket client connected.")
         try:
@@ -422,7 +494,7 @@ def _save_state(app_state):
     save_state(app_state["lamp"].state)
 
 
-def run_server(app_state: dict, host: str = "0.0.0.0", port: int = 8080):
+def run_server(app_state: dict, host: str = "127.0.0.1", port: int = 8080):
     """Run the web server in a background thread."""
     import uvicorn
 

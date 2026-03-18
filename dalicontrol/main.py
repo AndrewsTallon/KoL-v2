@@ -198,6 +198,8 @@ def parse_args():
         help="'manual' = pure human control (no automation), 'ai' = ML-driven adaptive control.",
     )
     p.add_argument("--web", action="store_true", help="Start the web dashboard server")
+    p.add_argument("--web-host", default="127.0.0.1",
+                   help="Web server bind address (default: 127.0.0.1, use 0.0.0.0 for network access)")
     p.add_argument("--web-port", type=int, default=8080, help="Web server port (default: 8080)")
     p.add_argument("--no-cli", action="store_true", help="Skip CLI input loop (use with --web)")
     p.add_argument(
@@ -398,7 +400,7 @@ def main():
         # Start web server if requested
         if args.web:
             from .web_server import run_server
-            run_server(app_state, host="0.0.0.0", port=args.web_port)
+            run_server(app_state, host=args.web_host, port=args.web_port)
             logging.info("Web dashboard: http://localhost:%d", args.web_port)
 
         # Start CLI input loop unless --no-cli
