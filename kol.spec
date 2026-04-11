@@ -3,7 +3,7 @@
 PyInstaller spec file for KoL Adaptive Lighting Control.
 
 Build with:
-    pyinstaller kol.spec --noconfirm
+    python -m PyInstaller kol.spec --noconfirm
 
 Output: dist/KoL/KoL.exe (one-directory bundle)
 """

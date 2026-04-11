@@ -17,13 +17,13 @@ if errorlevel 1 (
 
 REM --- Install / upgrade dependencies ---
 echo [1/3] Installing dependencies...
-pip install -r requirements.txt
-pip install pyinstaller
+python -m pip install -r requirements.txt
+python -m pip install pyinstaller
 
 REM --- Build ---
 echo.
 echo [2/3] Running PyInstaller...
-pyinstaller kol.spec --noconfirm
+python -m PyInstaller kol.spec --noconfirm
 
 if errorlevel 1 (
     echo.

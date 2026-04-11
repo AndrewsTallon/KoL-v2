@@ -47,6 +47,57 @@ class OccupancyStatus:
     moving_age_ms: int = -1       # ms since last moving=true (computed at snapshot time)
 
 
+def detect_sensor_port(baud: int = 115200, timeout: float = 2.0) -> Optional[str]:
+    """
+    Auto-detect the ESP32 sensor serial port.
+
+    Enumerates all COM ports, opens each briefly, reads a few lines,
+    and checks for the expected JSON format with ESP32 signature keys.
+
+    Returns the port device string (e.g. "COM3") or None if not found.
+    """
+    import serial.tools.list_ports
+
+    candidates = serial.tools.list_ports.comports()
+    logging.info("Auto-detecting ESP32 sensor port among %d port(s)...", len(candidates))
+
+    for port_info in candidates:
+        port = port_info.device
+        logging.info("  Probing %s (%s) ...", port, port_info.description)
+        try:
+            ser = serial.Serial(port, baud, timeout=timeout)
+            try:
+                ser.reset_input_buffer()
+                # Read up to 3 lines; first may be partial after ESP32 reset
+                for _ in range(3):
+                    raw = ser.readline()
+                    if not raw:
+                        continue
+                    text = raw.decode("utf-8", errors="ignore").strip()
+                    if not text:
+                        continue
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    # Check for ESP32 sensor signature keys
+                    if "raw" in data and "occupied" in data and "lux" in data:
+                        logging.info("  -> ESP32 sensor detected on %s", port)
+                        ser.close()
+                        return port
+            finally:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+        except (serial.SerialException, PermissionError, OSError) as exc:
+            logging.debug("  -> Could not open %s: %s", port, exc)
+            continue
+
+    logging.warning("Auto-detection found no ESP32 sensor on any port.")
+    return None
+
+
 class UsbOccupancyReader:
     """
     Reads JSON lines from the ESP32 over USB serial.
