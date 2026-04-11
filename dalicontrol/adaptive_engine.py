@@ -125,6 +125,14 @@ class AdaptiveEngine:
         return self.settings.cct_threshold if self.settings else self.CCT_THRESHOLD
 
     @property
+    def _max_brightness_step(self) -> float:
+        return self.settings.max_brightness_step_pct if self.settings else 15.0
+
+    @property
+    def _lamp_lux_at_100pct(self) -> float:
+        return self.settings.lamp_lux_at_100pct if self.settings else 400.0
+
+    @property
     def _dim_level(self) -> int:
         return self.settings.dim_level if self.settings else 10
 
@@ -739,6 +747,24 @@ class AdaptiveEngine:
     def stop(self) -> None:
         self._stop.set()
 
+    # ---- Ambient lux estimation ----
+
+    def _estimate_ambient_lux(self, sensor_lux: float) -> float:
+        """Subtract estimated lamp contribution from sensor reading.
+
+        The desk sensor reads total_lux = ambient + lamp_contribution.
+        Lamp contribution is approximately proportional to brightness %.
+        Without this correction, the adaptive engine treats its own light
+        output as ambient, causing brightness oscillation.
+        """
+        if self.lamp.state.is_off:
+            return max(0.0, sensor_lux)
+        current_pct = self._current_brightness_pct
+        if current_pct is None:
+            current_pct = level_to_pct(self.lamp.state.last_level)
+        lamp_contribution = (current_pct / 100.0) * self._lamp_lux_at_100pct
+        return max(0.0, sensor_lux - lamp_contribution)
+
     # ---- Main control loop ----
 
     def _run_loop(self) -> None:
@@ -981,7 +1007,8 @@ class AdaptiveEngine:
 
     def _apply_adaptive(self, snap, reason: str = "adaptive_eval") -> None:
         """Evaluate and apply lighting adjustments with rich decision context."""
-        lux = snap.lux if snap.lux is not None else 300.0
+        raw_lux = snap.lux if snap.lux is not None else 300.0
+        lux = self._estimate_ambient_lux(raw_lux)
 
         now = datetime.now()
         hour = now.hour + now.minute / 60.0
@@ -993,6 +1020,15 @@ class AdaptiveEngine:
         cur_brightness = level_to_pct(self.lamp.state.last_level)
         cur_dtr, cur_dtr1 = self.lamp.state.last_temp
         cur_cct = dtr_to_kelvin(cur_dtr, cur_dtr1)
+
+        # Max-step clamping: prevent large sudden jumps
+        was_off = self.lamp.state.is_off
+        if not was_off and self._current_brightness_pct is not None:
+            max_step = self._max_brightness_step
+            delta = rec_brightness - cur_brightness
+            if abs(delta) > max_step:
+                rec_brightness = cur_brightness + max_step * (1.0 if delta > 0 else -1.0)
+                rec_brightness = max(5.0, min(100.0, rec_brightness))
 
         brightness_delta = abs(rec_brightness - cur_brightness)
         cct_delta = abs(rec_cct - cur_cct)
@@ -1029,6 +1065,8 @@ class AdaptiveEngine:
             "circadian_cct_target": circadian_cct_target,
             "weather": weather_context,
             "lux": round(lux, 1),
+            "raw_sensor_lux": round(raw_lux, 1),
+            "estimated_ambient_lux": round(lux, 1),
             "lux_desc": lux_desc,
             "model_type": f"brightness: {brightness_source}, cct: {cct_source}",
             "rec_brightness": round(rec_brightness, 1),
@@ -1041,7 +1079,6 @@ class AdaptiveEngine:
             **brightness_context,
         }
 
-        was_off = self.lamp.state.is_off
         needs_brightness = brightness_delta >= self._brightness_threshold or was_off
         needs_cct = cct_delta >= self._cct_threshold
 
