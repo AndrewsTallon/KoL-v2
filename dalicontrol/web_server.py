@@ -42,6 +42,12 @@ from .profiles import (
     save_participant_info,
     select_profile,
 )
+from .weather import (
+    WeatherApiError,
+    fetch_current_weather,
+    fetch_forecast,
+    geocode_location,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +128,16 @@ class SettingsRequest(BaseModel):
     nominal_power_watts: Optional[float] = None
     weather_api_key: Optional[str] = None
     weather_location: Optional[str] = None
+    weather_lat: Optional[float] = None
+    weather_lon: Optional[float] = None
+    weather_location_label: Optional[str] = None
     openai_api_key: Optional[str] = None
     openai_model: Optional[str] = None
+
+
+class WeatherLocationRequest(BaseModel):
+    query: str
+    api_key: Optional[str] = None
 
 
 class CreateProfileRequest(BaseModel):
@@ -319,6 +333,10 @@ def create_app(app_state: dict) -> FastAPI:
                                 rationale=rationale_str,
                                 circadian_phase=context.get("circadian_phase", "") if context else "",
                                 weather_context=context.get("weather", "") if context else "",
+                                brightness_reasoning=context.get("brightness_reasoning", "") if context else "",
+                                target_lux=context.get("target_lux", "") if context else "",
+                                brightness_base_pct=context.get("brightness_base_pct", "") if context else "",
+                                weather_brightness_adjust_pct=context.get("weather_brightness_adjust_pct", "") if context else "",
                                 **_profile_fields(app_state),
                             ))
                         record_decision(
@@ -369,7 +387,8 @@ def create_app(app_state: dict) -> FastAPI:
         if not settings:
             return JSONResponse({"error": "Settings not available"}, status_code=500)
         req_data = req.model_dump() if hasattr(req, 'model_dump') else req.dict()
-        partial = {k: v for k, v in req_data.items() if v is not None}
+        fields_set = getattr(req, "model_fields_set", getattr(req, "__fields_set__", set()))
+        partial = {k: v for k, v in req_data.items() if v is not None or k in fields_set}
         if not partial:
             return settings.to_dict()
         try:
@@ -379,6 +398,99 @@ def create_app(app_state: dict) -> FastAPI:
             return {"ok": True, "settings": new_state}
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/weather/locations")
+    async def search_weather_locations(req: WeatherLocationRequest):
+        settings = app_state.get("settings")
+        if not settings:
+            return JSONResponse({"error": "Settings not available"}, status_code=500)
+
+        api_key = (req.api_key or settings.weather_api_key or "").strip()
+        if not api_key:
+            return JSONResponse({"error": "Weather API key is required"}, status_code=400)
+
+        try:
+            return {"ok": True, "locations": geocode_location(req.query, api_key, limit=5)}
+        except WeatherApiError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+
+    @app.get("/api/weather/status")
+    async def get_weather_status():
+        settings = app_state.get("settings")
+        if not settings:
+            return JSONResponse({"error": "Settings not available"}, status_code=500)
+
+        api_key = (settings.weather_api_key or "").strip()
+        if not api_key:
+            return {
+                "configured": False,
+                "ok": False,
+                "source": "",
+                "location": None,
+                "current": None,
+                "forecast": [],
+                "fetched_at": None,
+                "error": "Weather API key is not configured",
+            }
+
+        if settings.weather_lat is None or settings.weather_lon is None:
+            label = settings.weather_location_label or settings.weather_location or ""
+            return {
+                "configured": True,
+                "ok": False,
+                "source": "",
+                "location": {"label": label} if label else None,
+                "current": None,
+                "forecast": [],
+                "fetched_at": None,
+                "error": "Choose a verified weather location",
+            }
+
+        try:
+            current = fetch_current_weather(settings.weather_lat, settings.weather_lon, api_key)
+            forecast_data = fetch_forecast(settings.weather_lat, settings.weather_lon, api_key, cnt=8)
+        except WeatherApiError as exc:
+            return {
+                "configured": True,
+                "ok": False,
+                "source": "openweather",
+                "location": {
+                    "label": settings.weather_location_label or settings.weather_location,
+                    "lat": settings.weather_lat,
+                    "lon": settings.weather_lon,
+                },
+                "current": None,
+                "forecast": [],
+                "fetched_at": None,
+                "error": str(exc),
+            }
+
+        forecast_location = forecast_data.get("location") or {}
+        label = (
+            settings.weather_location_label
+            or ", ".join(
+                part for part in (
+                    forecast_location.get("name"),
+                    forecast_location.get("country"),
+                )
+                if part
+            )
+            or settings.weather_location
+        )
+        return {
+            "configured": True,
+            "ok": True,
+            "source": "openweather",
+            "location": {
+                "label": label,
+                "lat": settings.weather_lat,
+                "lon": settings.weather_lon,
+            },
+            "current": current,
+            "forecast": forecast_data.get("forecast", []),
+            "fetched_at": current.get("fetched_at") or forecast_data.get("fetched_at"),
+            "error": "",
+        }
 
     # ---- Participant Profiles ----
 

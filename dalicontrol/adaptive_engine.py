@@ -19,9 +19,6 @@ import logging
 import math
 import threading
 import time
-import urllib.parse
-import urllib.request
-import json as _json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -29,6 +26,7 @@ from typing import Optional, Tuple
 from .cct_utils import dtr_to_kelvin, kelvin_to_dtr, level_to_pct
 from .lamp_state import LampController
 from .paths import MODELS_DIR, TELEM_DIR
+from .weather import WeatherApiError, fetch_current_weather
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +101,7 @@ class AdaptiveEngine:
         self._brightness_source: str = "fallback"
         self._cct_source: str = "circadian"
         self._prediction_source: str = "fallback / circadian"  # backward compat
+        self._last_brightness_context: dict = {}
 
         # Callback for telemetry logging
         self.on_action = None  # callable(action_str, reason_str, rationale_str, context)
@@ -356,6 +355,7 @@ class AdaptiveEngine:
         # The circadian brightness curve is always the foundation.
         # It computes a comfortable brightness given time-of-day and
         # ambient lux (more daylight -> less artificial light needed).
+        target_lux = self._target_desk_lux(hour)
         base_brightness = self._circadian_brightness(lux, hour)
         self._brightness_source = "circadian + lux"
 
@@ -376,7 +376,26 @@ class AdaptiveEngine:
             pref_nudge = 0.2 * (pref_brightness - base_brightness)
             self._brightness_source += " + preferences"
 
-        brightness_pct = base_brightness + ml_nudge + pref_nudge
+        api_weather = self._fetch_weather()
+        weather_nudge, weather_condition = self._weather_brightness_adjustment(
+            api_weather, lux, hour
+        )
+        if weather_nudge:
+            self._brightness_source += " + weather"
+
+        brightness_pct_unclamped = base_brightness + ml_nudge + pref_nudge + weather_nudge
+        brightness_pct = max(5.0, min(100.0, brightness_pct_unclamped))
+        self._last_brightness_context = {
+            "target_lux": round(target_lux, 1),
+            "ambient_lux": round(float(lux), 1),
+            "brightness_base_pct": round(base_brightness, 1),
+            "ml_brightness_adjust_pct": round(ml_nudge, 1),
+            "preference_brightness_adjust_pct": round(pref_nudge, 1),
+            "weather_brightness_adjust_pct": round(weather_nudge, 1),
+            "weather_condition": weather_condition,
+            "brightness_unclamped_pct": round(brightness_pct_unclamped, 1),
+            "brightness_final_pct": round(brightness_pct, 1),
+        }
 
         # === CCT: Circadian-first ===
         # The circadian curve is always the foundation for CCT.
@@ -399,7 +418,6 @@ class AdaptiveEngine:
         # Combined source string for backward compatibility
         self._prediction_source = f"{self._brightness_source} / {self._cct_source}"
 
-        brightness_pct = max(5.0, min(100.0, brightness_pct))
         cct_kelvin = max(2700, min(6500, cct_kelvin))
 
         return brightness_pct, cct_kelvin
@@ -549,6 +567,85 @@ class AdaptiveEngine:
 
         return reason
 
+    @staticmethod
+    def _adjustment_phrase(label: str, value: float) -> str:
+        if value > 0:
+            return f"{label} added {value:.0f}%"
+        if value < 0:
+            return f"{label} reduced {abs(value):.0f}%"
+        return f"{label} added 0%"
+
+    def _build_brightness_reasoning(
+        self, phase: str, rec_brightness: Optional[float] = None
+    ) -> str:
+        """Explain the brightness recommendation from its calculation parts."""
+        ctx = self._last_brightness_context or {}
+        final_pct = ctx.get("brightness_final_pct", rec_brightness)
+        target_lux = ctx.get("target_lux")
+        ambient_lux = ctx.get("ambient_lux")
+        base_pct = ctx.get("brightness_base_pct")
+        if target_lux is None or ambient_lux is None or base_pct is None:
+            return (
+                f"Brightness {float(final_pct or 0.0):.0f}% selected "
+                f"from {self._brightness_source}."
+            )
+        ml_nudge = float(ctx.get("ml_brightness_adjust_pct") or 0.0)
+        pref_nudge = float(ctx.get("preference_brightness_adjust_pct") or 0.0)
+        weather_nudge = float(ctx.get("weather_brightness_adjust_pct") or 0.0)
+        weather_condition = str(ctx.get("weather_condition") or "").strip()
+
+        parts = [
+            f"{phase} target is {target_lux:.0f} lux",
+            f"ambient is {ambient_lux:.0f} lux",
+            f"circadian base is {base_pct:.0f}%",
+        ]
+        if ml_nudge:
+            parts.append(self._adjustment_phrase("patterns", ml_nudge))
+        if pref_nudge:
+            parts.append(self._adjustment_phrase("preferences", pref_nudge))
+        weather_label = (
+            f"{weather_condition.lower()} weather"
+            if weather_condition and weather_condition != "night"
+            else "weather"
+        )
+        parts.append(self._adjustment_phrase(weather_label, weather_nudge))
+
+        return f"Brightness {final_pct:.0f}% because " + ", ".join(parts) + "."
+
+    def _weather_brightness_adjustment(
+        self, api_weather: Optional[dict], lux: float, hour: float
+    ) -> Tuple[float, str]:
+        """Return a conservative brightness nudge from live weather conditions."""
+        condition = str((api_weather or {}).get("condition") or "").strip()
+        if hour < 7 or hour > 19:
+            return 0.0, "night"
+        if not api_weather:
+            return 0.0, ""
+        if lux >= 500:
+            return 0.0, condition
+
+        normalized = condition.lower()
+        severe = {
+            "thunderstorm",
+            "snow",
+            "mist",
+            "fog",
+            "haze",
+            "smoke",
+            "dust",
+            "sand",
+            "ash",
+            "squall",
+            "tornado",
+        }
+        if normalized in severe:
+            return (8.0 if lux < 300 else 4.0), condition
+        if normalized in {"rain", "drizzle"}:
+            return (6.0 if lux < 300 else 3.0), condition
+        if normalized == "clouds":
+            return (4.0 if lux < 300 else 2.0), condition
+        return 0.0, condition
+
     def _infer_weather_lux(self, lux: float, hour: float) -> str:
         """Infer weather conditions from ambient lux as a proxy."""
         if hour < 7 or hour > 19:
@@ -565,8 +662,9 @@ class AdaptiveEngine:
         if not self.settings:
             return None
         api_key = self.settings.weather_api_key
-        location = self.settings.weather_location
-        if not api_key or not location:
+        lat = getattr(self.settings, "weather_lat", None)
+        lon = getattr(self.settings, "weather_lon", None)
+        if not api_key or lat is None or lon is None:
             return None
 
         now = time.time()
@@ -574,26 +672,11 @@ class AdaptiveEngine:
             return self._weather_cache
 
         try:
-            params = urllib.parse.urlencode({
-                "q": location,
-                "appid": api_key,
-                "units": "metric",
-            })
-            url = f"https://api.openweathermap.org/data/2.5/weather?{params}"
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                data = _json.loads(resp.read().decode())
-                weather = data.get("weather", [{}])[0]
-                main = data.get("main", {})
-                result = {
-                    "condition": weather.get("main", "Unknown"),
-                    "description": weather.get("description", ""),
-                    "temp_c": main.get("temp"),
-                    "humidity": main.get("humidity"),
-                }
-                self._weather_cache = result
-                self._weather_cache_time = now
-                return result
-        except Exception as exc:
+            result = fetch_current_weather(lat, lon, api_key)
+            self._weather_cache = result
+            self._weather_cache_time = now
+            return result
+        except WeatherApiError as exc:
             logger.debug("Weather API fetch failed: %s", exc)
             return None
 
@@ -935,6 +1018,10 @@ class AdaptiveEngine:
         cct_reasoning = self._build_cct_reasoning(
             rec_cct, circadian_cct_target, circadian_phase, hour, cct_source
         )
+        brightness_reasoning = self._build_brightness_reasoning(
+            circadian_phase, rec_brightness
+        )
+        brightness_context = dict(self._last_brightness_context or {})
 
         context = {
             "time_exact": time_exact,
@@ -948,8 +1035,10 @@ class AdaptiveEngine:
             "rec_cct": rec_cct,
             "brightness_delta": round(brightness_delta, 1),
             "cct_delta": cct_delta,
+            "brightness_reasoning": brightness_reasoning,
             "cct_reasoning": cct_reasoning,
             "behavior_note": behavior_note,
+            **brightness_context,
         }
 
         was_off = self.lamp.state.is_off
@@ -988,7 +1077,7 @@ class AdaptiveEngine:
                 f"Person returned after absence -> restoring adaptive lighting. "
                 f"{circadian_phase} ({time_exact}), "
                 f"{weather_context}. "
-                f"Brightness {rec_brightness:.0f}%, {temp_desc} {rec_cct}K. "
+                f"{brightness_reasoning} {temp_desc.capitalize()} {rec_cct}K. "
                 f"{cct_reasoning}"
             )
             if feedback_note:
@@ -998,7 +1087,7 @@ class AdaptiveEngine:
                 f"{circadian_phase.capitalize()} ({time_exact}), "
                 f"{weather_context}, "
                 f"{lux_desc} ambient ({lux:.0f} lux). "
-                f"Brightness {rec_brightness:.0f}%, {temp_desc} {rec_cct}K. "
+                f"{brightness_reasoning} {temp_desc.capitalize()} {rec_cct}K. "
                 f"{cct_reasoning}"
             )
             if behavior_note:
@@ -1009,6 +1098,7 @@ class AdaptiveEngine:
             rationale = (
                 f"No adjustment needed at {time_exact}. "
                 f"{circadian_phase}, {weather_context}. "
+                f"{brightness_reasoning} "
                 f"Brightness delta {brightness_delta:.0f}% < {self._brightness_threshold}%, "
                 f"CCT delta {cct_delta}K < {self._cct_threshold}K"
             )

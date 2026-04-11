@@ -322,6 +322,9 @@ function updateDashboard(data) {
     if (ld.weather) {
       badgesEl.appendChild(makeBadge(ld.weather, 'weather'));
     }
+    if (Number(ld.weather_brightness_adjust_pct || 0) !== 0) {
+      badgesEl.appendChild(makeBadge(`weather ${formatSignedPct(ld.weather_brightness_adjust_pct)}`, 'weather'));
+    }
     if (ld.model_type) {
       badgesEl.appendChild(makeBadge(ld.model_type, 'model'));
     }
@@ -375,6 +378,94 @@ async function apiGet(endpoint) {
   } catch (err) {
     console.error('API error:', err);
     return null;
+  }
+}
+
+// ---- Weather Status ----
+
+function setWeatherBadge(text, className) {
+  const badge = document.getElementById('weatherStatusBadge');
+  badge.textContent = text;
+  badge.className = `weather-status-badge ${className}`;
+}
+
+function renderWeatherForecast(forecast) {
+  const list = document.getElementById('weatherForecastList');
+  list.innerHTML = '';
+  (forecast || []).slice(0, 8).forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'weather-forecast-item';
+    const when = item.time
+      ? new Date(item.time.replace(' ', 'T') + 'Z').toLocaleString([], {
+          weekday: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : '--';
+    const temp = item.temp_c !== null && item.temp_c !== undefined
+      ? `${Math.round(item.temp_c)} C`
+      : '--';
+    const pop = item.pop !== null && item.pop !== undefined
+      ? `Rain ${Math.round(item.pop * 100)}%`
+      : '';
+    card.innerHTML =
+      `<strong>${escapeHtml(when)}</strong>` +
+      `<span>${escapeHtml(item.condition || 'Unknown')}, ${escapeHtml(temp)}</span>` +
+      (pop ? `<span>${escapeHtml(pop)}</span>` : '');
+    list.appendChild(card);
+  });
+}
+
+function renderWeatherStatus(data) {
+  const locationEl = document.getElementById('weatherLocationLabel');
+  const summaryEl = document.getElementById('weatherCurrentSummary');
+  const updatedEl = document.getElementById('weatherUpdatedAt');
+
+  if (!data || !data.configured) {
+    setWeatherBadge('Not configured', 'weather-muted');
+    locationEl.textContent = '--';
+    summaryEl.textContent = 'Add an OpenWeather API key and verified location.';
+    updatedEl.textContent = '';
+    renderWeatherForecast([]);
+    return;
+  }
+
+  if (!data.ok) {
+    const notVerified = data.error && data.error.toLowerCase().includes('verified');
+    setWeatherBadge(notVerified ? 'Location not verified' : 'Error', 'weather-error');
+    locationEl.textContent = data.location && data.location.label ? data.location.label : '--';
+    summaryEl.textContent = data.error || 'Weather check failed.';
+    updatedEl.textContent = '';
+    renderWeatherForecast([]);
+    return;
+  }
+
+  setWeatherBadge('Live', 'weather-live');
+  locationEl.textContent = data.location && data.location.label ? data.location.label : '--';
+  const current = data.current || {};
+  const temp = current.temp_c !== null && current.temp_c !== undefined
+    ? `${Math.round(current.temp_c)} C`
+    : '--';
+  const humidity = current.humidity !== null && current.humidity !== undefined
+    ? `Humidity ${current.humidity}%`
+    : '';
+  summaryEl.textContent = [current.condition, temp, humidity].filter(Boolean).join(' - ');
+  updatedEl.textContent = data.fetched_at
+    ? `Checked ${new Date(data.fetched_at).toLocaleTimeString()}`
+    : '';
+  renderWeatherForecast(data.forecast || []);
+}
+
+async function loadWeatherStatus(showToastOnResult = false) {
+  setWeatherBadge('Checking', 'weather-muted');
+  const data = await apiGet('/api/weather/status');
+  renderWeatherStatus(data);
+  if (showToastOnResult && data && data.configured) {
+    if (data.ok) {
+      showToast('Weather API check passed', 'success');
+    } else if (data.error) {
+      showToast('Weather check: ' + data.error, 'error');
+    }
   }
 }
 
@@ -540,6 +631,9 @@ async function loadDecisions() {
     if (d.weather) {
       badgesHtml += `<span class="context-badge context-weather">${escapeHtml(d.weather)}</span>`;
     }
+    if (Number(d.weather_brightness_adjust_pct || 0) !== 0) {
+      badgesHtml += `<span class="context-badge context-weather">weather ${escapeHtml(formatSignedPct(d.weather_brightness_adjust_pct))}</span>`;
+    }
     if (d.model_type) {
       badgesHtml += `<span class="context-badge context-model">${escapeHtml(d.model_type)}</span>`;
     }
@@ -570,7 +664,16 @@ async function loadDecisions() {
     if (ld.weather) {
       badgesEl.appendChild(makeBadge(ld.weather, 'weather'));
     }
+    if (Number(ld.weather_brightness_adjust_pct || 0) !== 0) {
+      badgesEl.appendChild(makeBadge(`weather ${formatSignedPct(ld.weather_brightness_adjust_pct)}`, 'weather'));
+    }
   }
+}
+
+function formatSignedPct(value) {
+  const n = Number(value || 0);
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${Math.round(n)}%`;
 }
 
 function escapeHtml(str) {
@@ -596,7 +699,10 @@ const apiSettingsKeys = new Set([
   'openai_model',
   'weather_api_key',
   'weather_location',
+  'weather_location_label',
 ]);
+
+const coordinateSettingsKeys = new Set(['weather_lat', 'weather_lon']);
 
 const settingsFields = {
   dim_delay: 'sDimDelay',
@@ -613,6 +719,9 @@ const settingsFields = {
   openai_model: 'sOpenAiModel',
   weather_api_key: 'sWeatherApiKey',
   weather_location: 'sWeatherLocation',
+  weather_lat: 'sWeatherLat',
+  weather_lon: 'sWeatherLon',
+  weather_location_label: 'sWeatherLocationLabel',
 };
 
 const onboardingApiFields = {
@@ -620,6 +729,9 @@ const onboardingApiFields = {
   openai_model: 'onboardingOpenAiModel',
   weather_api_key: 'onboardingWeatherApiKey',
   weather_location: 'onboardingWeatherLocation',
+  weather_lat: 'onboardingWeatherLat',
+  weather_lon: 'onboardingWeatherLon',
+  weather_location_label: 'onboardingWeatherLocationLabel',
 };
 
 function populateFieldMap(fieldMap, values) {
@@ -638,6 +750,15 @@ function collectSettingsPayload(fieldMap, includeEmptyApiValues = false) {
     if (!el) continue;
     const val = el.value;
 
+    if (coordinateSettingsKeys.has(key)) {
+      if (val === '' || val === undefined) {
+        if (includeEmptyApiValues) payload[key] = null;
+        continue;
+      }
+      payload[key] = parseFloat(val);
+      continue;
+    }
+
     if (apiSettingsKeys.has(key)) {
       if (val === '' && !includeEmptyApiValues) continue;
       payload[key] = val;
@@ -650,27 +771,150 @@ function collectSettingsPayload(fieldMap, includeEmptyApiValues = false) {
   return payload;
 }
 
+function getWeatherUi(prefix) {
+  return {
+    apiKey: document.getElementById(`${prefix}WeatherApiKey`),
+    location: document.getElementById(`${prefix}WeatherLocation`),
+    lat: document.getElementById(`${prefix}WeatherLat`),
+    lon: document.getElementById(`${prefix}WeatherLon`),
+    label: document.getElementById(`${prefix}WeatherLocationLabel`),
+    findBtn: document.getElementById(`${prefix}WeatherFindBtn`),
+    status: document.getElementById(`${prefix}WeatherVerifyStatus`),
+    candidates: document.getElementById(`${prefix}WeatherCandidates`),
+  };
+}
+
+function setLocationStatus(ui, message, className = '') {
+  if (!ui.status) return;
+  ui.status.textContent = message;
+  ui.status.className = `weather-verify-status ${className}`.trim();
+}
+
+function clearLocationVerification(ui) {
+  if (ui.lat) ui.lat.value = '';
+  if (ui.lon) ui.lon.value = '';
+  if (ui.label) ui.label.value = '';
+  if (ui.candidates) ui.candidates.innerHTML = '';
+  setLocationStatus(ui, 'Choose a verified location before saving.');
+}
+
+function applyWeatherSettingsToUi(prefix, settings) {
+  const ui = getWeatherUi(prefix);
+  if (!ui.location) return;
+  if (settings.weather_lat !== null && settings.weather_lat !== undefined) {
+    ui.lat.value = settings.weather_lat;
+  }
+  if (settings.weather_lon !== null && settings.weather_lon !== undefined) {
+    ui.lon.value = settings.weather_lon;
+  }
+  if (settings.weather_location_label) {
+    ui.label.value = settings.weather_location_label;
+    ui.location.value = settings.weather_location_label;
+  }
+
+  if (ui.lat.value && ui.lon.value) {
+    setLocationStatus(ui, `Verified: ${ui.label.value || ui.location.value}`, 'verified');
+  } else {
+    clearLocationVerification(ui);
+    if (settings.weather_location) {
+      ui.location.value = settings.weather_location;
+      setLocationStatus(ui, 'Location is not verified yet.', 'error');
+    }
+  }
+}
+
+function locationLabel(candidate) {
+  return candidate.label || [candidate.name, candidate.state, candidate.country].filter(Boolean).join(', ');
+}
+
+function renderLocationCandidates(ui, locations) {
+  ui.candidates.innerHTML = '';
+  if (!locations || locations.length === 0) {
+    setLocationStatus(ui, 'No matching locations found.', 'error');
+    return;
+  }
+
+  locations.forEach(candidate => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'location-candidate';
+    btn.textContent = locationLabel(candidate);
+    btn.onclick = () => {
+      const label = locationLabel(candidate);
+      ui.location.value = label;
+      ui.lat.value = candidate.lat;
+      ui.lon.value = candidate.lon;
+      ui.label.value = label;
+      ui.candidates.innerHTML = '';
+      setLocationStatus(ui, `Verified: ${label}`, 'verified');
+    };
+    ui.candidates.appendChild(btn);
+  });
+  setLocationStatus(ui, 'Select the matching location.');
+}
+
+async function findWeatherLocation(prefix) {
+  const ui = getWeatherUi(prefix);
+  const query = (ui.location.value || '').trim();
+  const apiKey = (ui.apiKey.value || '').trim();
+  if (!apiKey) {
+    setLocationStatus(ui, 'Add the OpenWeather API key first.', 'error');
+    return;
+  }
+  if (!query) {
+    setLocationStatus(ui, 'Type a location to search.', 'error');
+    return;
+  }
+
+  setLocationStatus(ui, 'Searching...');
+  const result = await apiPost('/api/weather/locations', { query, api_key: apiKey });
+  if (result && result.ok) {
+    renderLocationCandidates(ui, result.locations || []);
+  } else {
+    setLocationStatus(ui, result && result.error ? result.error : 'Location search failed.', 'error');
+  }
+}
+
+function bindWeatherLocationUi(prefix) {
+  const ui = getWeatherUi(prefix);
+  if (!ui.location || !ui.findBtn) return;
+  ui.findBtn.onclick = () => findWeatherLocation(prefix);
+  ui.location.addEventListener('input', () => clearLocationVerification(ui));
+}
+
 async function loadSettings() {
   const settings = await apiGet('/api/settings');
   if (!settings) return;
   populateFieldMap(settingsFields, settings);
   populateFieldMap(onboardingApiFields, settings);
+  applyWeatherSettingsToUi('s', settings);
+  applyWeatherSettingsToUi('onboarding', settings);
 }
 
 document.getElementById('settingsSaveBtn').onclick = async () => {
   const payload = collectSettingsPayload(settingsFields, true);
+  if (payload.weather_lat === null || payload.weather_lon === null) {
+    payload.weather_location = '';
+    payload.weather_location_label = '';
+  }
 
   const result = await apiPost('/api/settings', payload);
   if (result && result.ok) {
     populateFieldMap(settingsFields, result.settings || {});
     populateFieldMap(onboardingApiFields, result.settings || {});
+    applyWeatherSettingsToUi('s', result.settings || {});
+    applyWeatherSettingsToUi('onboarding', result.settings || {});
     showToast('Settings saved successfully', 'success');
+    await loadWeatherStatus(true);
   } else if (result && result.error) {
     showToast('Error: ' + result.error, 'error');
   } else {
     showToast('Failed to save settings', 'error');
   }
 };
+
+bindWeatherLocationUi('s');
+bindWeatherLocationUi('onboarding');
 
 // ---- Participant Profiles and Questionnaires ----
 
@@ -828,6 +1072,14 @@ document.getElementById('createProfileForm').onsubmit = async (e) => {
 
 async function saveOnboardingApiSettings() {
   const payload = collectSettingsPayload(onboardingApiFields, false);
+  if (payload.weather_location && (
+    payload.weather_lat === undefined || payload.weather_lon === undefined
+  )) {
+    payload.weather_location = '';
+    payload.weather_location_label = '';
+    payload.weather_lat = null;
+    payload.weather_lon = null;
+  }
   if (Object.keys(payload).length === 0) {
     return true;
   }
@@ -835,6 +1087,9 @@ async function saveOnboardingApiSettings() {
   if (result && result.ok) {
     populateFieldMap(settingsFields, result.settings || {});
     populateFieldMap(onboardingApiFields, result.settings || {});
+    applyWeatherSettingsToUi('s', result.settings || {});
+    applyWeatherSettingsToUi('onboarding', result.settings || {});
+    await loadWeatherStatus(true);
     return true;
   }
   showToast(result && result.error ? result.error : 'Failed to save API keys', 'error');
@@ -956,6 +1211,7 @@ connectWS();
 loadRuns();
 loadDecisions();
 loadSettings();
+loadWeatherStatus();
 loadProfiles();
 setInterval(loadDecisions, 30000);
 

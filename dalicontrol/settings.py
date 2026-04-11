@@ -30,6 +30,8 @@ _RANGES: Dict[str, tuple] = {
     "brightness_feedback_window_s": (0.0, 30.0),
     "brightness_feedback_min_lux_delta": (0.0, 100.0),
     "nominal_power_watts": (1.0, 500.0),
+    "weather_lat": (-90.0, 90.0),
+    "weather_lon": (-180.0, 180.0),
 }
 
 
@@ -54,6 +56,9 @@ class Settings:
     # Weather API (optional)
     weather_api_key: str = ""
     weather_location: str = ""         # city name or "lat,lon"
+    weather_lat: Optional[float] = None
+    weather_lon: Optional[float] = None
+    weather_location_label: str = ""
 
     # OpenAI API (optional)
     openai_api_key: str = ""
@@ -117,20 +122,23 @@ class Settings:
                     "brightness_feedback_window_s",
                     "brightness_feedback_min_lux_delta",
                     "nominal_power_watts",
+                    "weather_lat",
+                    "weather_lon",
                 ):
-                    val = float(val)
+                    val = None if val in (None, "") else float(val)
                 elif key in ("dim_level", "eval_interval", "brightness_threshold", "cct_threshold"):
                     val = int(val)
                 elif key in (
                     "weather_api_key",
                     "weather_location",
+                    "weather_location_label",
                     "openai_api_key",
                     "openai_model",
                 ):
-                    val = str(val)
+                    val = "" if val is None else str(val)
 
                 # Range validation for numeric fields
-                if key in _RANGES:
+                if key in _RANGES and val is not None:
                     lo, hi = _RANGES[key]
                     if not (lo <= val <= hi):
                         errors.append(f"{key}: {val} out of range [{lo}, {hi}]")

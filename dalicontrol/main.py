@@ -63,6 +63,10 @@ class TelemetryLogger:
         "user_text",
         "circadian_phase",
         "weather_context",
+        "brightness_reasoning",
+        "target_lux",
+        "brightness_base_pct",
+        "weather_brightness_adjust_pct",
     ]
 
     def __init__(self, mode: str):
@@ -110,6 +114,10 @@ def build_row(
     user_text: str = "",
     circadian_phase: str = "",
     weather_context: str = "",
+    brightness_reasoning: str = "",
+    target_lux: str = "",
+    brightness_base_pct: str = "",
+    weather_brightness_adjust_pct: str = "",
     profile_id: str = "",
     profile_name: str = "",
 ) -> dict:
@@ -153,6 +161,10 @@ def build_row(
         "user_text": user_text,
         "circadian_phase": circadian_phase,
         "weather_context": weather_context,
+        "brightness_reasoning": brightness_reasoning,
+        "target_lux": target_lux,
+        "brightness_base_pct": brightness_base_pct,
+        "weather_brightness_adjust_pct": weather_brightness_adjust_pct,
     }
 
 
@@ -184,6 +196,12 @@ def record_decision(
         entry["rec_brightness"] = context.get("rec_brightness")
         entry["rec_cct"] = context.get("rec_cct")
         entry["model_type"] = context.get("model_type", "")
+        entry["brightness_reasoning"] = context.get("brightness_reasoning", "")
+        entry["target_lux"] = context.get("target_lux")
+        entry["brightness_base_pct"] = context.get("brightness_base_pct")
+        entry["weather_brightness_adjust_pct"] = context.get(
+            "weather_brightness_adjust_pct"
+        )
     with _decisions_lock:
         _recent_decisions.append(entry)
         if len(_recent_decisions) > 100:
@@ -325,6 +343,10 @@ def main():
                     rationale=rationale_str,
                     circadian_phase=context.get("circadian_phase", "") if context else "",
                     weather_context=context.get("weather", "") if context else "",
+                    brightness_reasoning=context.get("brightness_reasoning", "") if context else "",
+                    target_lux=context.get("target_lux", "") if context else "",
+                    brightness_base_pct=context.get("brightness_base_pct", "") if context else "",
+                    weather_brightness_adjust_pct=context.get("weather_brightness_adjust_pct", "") if context else "",
                     **active_profile_fields(),
                 ))
                 record_decision(

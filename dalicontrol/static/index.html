@@ -116,6 +116,19 @@
               <span id="statMode" class="value">--</span>
             </div>
           </div>
+
+          <div class="status-card weather-status-card">
+            <div class="weather-card-header">
+              <h3>Weather</h3>
+              <span id="weatherStatusBadge" class="weather-status-badge weather-muted">Checking</span>
+            </div>
+            <div class="weather-current">
+              <span id="weatherLocationLabel">--</span>
+              <span id="weatherCurrentSummary">Waiting for weather data...</span>
+              <span id="weatherUpdatedAt" class="weather-updated"></span>
+            </div>
+            <div id="weatherForecastList" class="weather-forecast-list"></div>
+          </div>
         </div>
       </section>
 
@@ -276,7 +289,15 @@
             </div>
             <div>
               <label for="sWeatherLocation">Weather Location</label>
-              <input type="text" id="sWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
+              <div class="location-search-row">
+                <input type="text" id="sWeatherLocation" placeholder="e.g. Pfarrkirchen">
+                <button type="button" id="sWeatherFindBtn" class="btn btn-sm">Find</button>
+              </div>
+              <input type="hidden" id="sWeatherLat">
+              <input type="hidden" id="sWeatherLon">
+              <input type="hidden" id="sWeatherLocationLabel">
+              <small id="sWeatherVerifyStatus" class="weather-verify-status">Choose a verified location before saving.</small>
+              <div id="sWeatherCandidates" class="location-candidates"></div>
             </div>
           </div>
         </div>
@@ -336,7 +357,15 @@
           </div>
           <div class="pref-field">
             <label for="onboardingWeatherLocation">Weather Location</label>
-            <input type="text" id="onboardingWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
+            <div class="location-search-row">
+              <input type="text" id="onboardingWeatherLocation" placeholder="e.g. Pfarrkirchen">
+              <button type="button" id="onboardingWeatherFindBtn" class="btn btn-sm">Find</button>
+            </div>
+            <input type="hidden" id="onboardingWeatherLat">
+            <input type="hidden" id="onboardingWeatherLon">
+            <input type="hidden" id="onboardingWeatherLocationLabel">
+            <small id="onboardingWeatherVerifyStatus" class="weather-verify-status">Choose a verified location before saving.</small>
+            <div id="onboardingWeatherCandidates" class="location-candidates"></div>
           </div>
         </div>
       </div>
