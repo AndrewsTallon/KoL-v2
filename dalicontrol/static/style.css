@@ -17,6 +17,8 @@
   --glow-cyan-soft: rgba(66, 165, 245, 0.25);
   --glow-gold: rgba(255, 167, 38, 0.5);
   --glow-gold-soft: rgba(255, 167, 38, 0.2);
+  --header-logo-height: 78px;
+  --gate-logo-height: 160px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -33,13 +35,13 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 24px;
+  padding: 10px 24px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
 
 header h1 {
-  font-size: 1.3rem;
+  font-size: 1.45rem;
   font-weight: 600;
 }
 
@@ -47,22 +49,22 @@ header h1 {
 .header-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
 }
 
 .header-logo {
-  height: 38px;
+  height: var(--header-logo-height);
   width: auto;
   filter:
-    drop-shadow(0 0 4px var(--glow-cyan-soft))
-    drop-shadow(0 0 8px var(--glow-gold-soft));
+    drop-shadow(0 0 8px var(--glow-cyan-soft))
+    drop-shadow(0 0 18px var(--glow-gold-soft));
   transition: filter 0.3s ease;
 }
 
 .header-logo:hover {
   filter:
-    drop-shadow(0 0 6px var(--glow-cyan))
-    drop-shadow(0 0 12px var(--glow-gold));
+    drop-shadow(0 0 12px var(--glow-cyan))
+    drop-shadow(0 0 28px var(--glow-gold));
 }
 
 .header-actions {
@@ -173,17 +175,17 @@ header h1 {
 @keyframes logo-pulse {
   0%, 100% {
     filter:
-      drop-shadow(0 0 8px var(--glow-cyan))
-      drop-shadow(0 0 18px var(--glow-cyan-soft))
-      drop-shadow(0 0 6px var(--glow-gold))
-      drop-shadow(0 0 24px var(--glow-gold-soft));
+      drop-shadow(0 0 12px var(--glow-cyan))
+      drop-shadow(0 0 28px var(--glow-cyan-soft))
+      drop-shadow(0 0 10px var(--glow-gold))
+      drop-shadow(0 0 38px var(--glow-gold-soft));
   }
   50% {
     filter:
-      drop-shadow(0 0 12px var(--glow-cyan))
-      drop-shadow(0 0 26px var(--glow-cyan-soft))
-      drop-shadow(0 0 10px var(--glow-gold))
-      drop-shadow(0 0 32px var(--glow-gold-soft));
+      drop-shadow(0 0 18px var(--glow-cyan))
+      drop-shadow(0 0 42px var(--glow-cyan-soft))
+      drop-shadow(0 0 16px var(--glow-gold))
+      drop-shadow(0 0 52px var(--glow-gold-soft));
   }
 }
 
@@ -757,7 +759,7 @@ canvas { width: 100% !important; height: 100% !important; }
 /* Profile Gate - Prominent Logo */
 .gate-logo-wrapper {
   text-align: center;
-  padding: 20px 0 8px;
+  padding: 28px 0 16px;
   position: relative;
 }
 
@@ -766,8 +768,8 @@ canvas { width: 100% !important; height: 100% !important; }
   position: absolute;
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  width: 280px;
-  height: 150px;
+  width: 430px;
+  height: 240px;
   background: radial-gradient(
     ellipse,
     rgba(66, 165, 245, 0.12) 0%,
@@ -779,13 +781,13 @@ canvas { width: 100% !important; height: 100% !important; }
 }
 
 .gate-logo {
-  height: 100px;
+  height: var(--gate-logo-height);
   width: auto;
   filter:
-    drop-shadow(0 0 8px var(--glow-cyan))
-    drop-shadow(0 0 18px var(--glow-cyan-soft))
-    drop-shadow(0 0 6px var(--glow-gold))
-    drop-shadow(0 0 24px var(--glow-gold-soft));
+    drop-shadow(0 0 12px var(--glow-cyan))
+    drop-shadow(0 0 28px var(--glow-cyan-soft))
+    drop-shadow(0 0 10px var(--glow-gold))
+    drop-shadow(0 0 38px var(--glow-gold-soft));
   animation: logo-pulse 3s ease-in-out infinite;
   position: relative;
   z-index: 1;
@@ -1093,9 +1095,9 @@ canvas { width: 100% !important; height: 100% !important; }
   .modal-content { padding: 20px; }
   .profile-picker-grid { grid-template-columns: 1fr; }
   .likert-row { grid-template-columns: repeat(5, minmax(36px, 1fr)); }
-  .header-logo { height: 30px; }
-  .gate-logo { height: 70px; }
-  .gate-logo-wrapper::before { width: 200px; height: 110px; }
+  .header-logo { height: 58px; }
+  .gate-logo { height: 120px; }
+  .gate-logo-wrapper::before { width: 320px; height: 180px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
