@@ -38,6 +38,7 @@ echo [3/3] Preparing output...
 if not exist "dist\KoL\data" mkdir "dist\KoL\data"
 if not exist "dist\KoL\data\telemetry" mkdir "dist\KoL\data\telemetry"
 if not exist "dist\KoL\data\models" mkdir "dist\KoL\data\models"
+if not exist "dist\KoL\data\profiles" mkdir "dist\KoL\data\profiles"
 
 echo.
 echo ============================================================

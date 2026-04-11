@@ -38,7 +38,7 @@ build_exe.bat
 This will:
 1. Install/upgrade dependencies and PyInstaller
 2. Run `pyinstaller kol.spec --noconfirm`
-3. Create the `data/` subdirectories in the output
+3. Create the `data/` subdirectories in the output, including `data/profiles`
 
 **Output**: `dist/KoL/KoL.exe`
 
@@ -86,6 +86,8 @@ KoL-v2/
 | Static assets (read-only) | `dalicontrol/static/` | `_internal/dalicontrol/static/` |
 | Telemetry CSVs | `dalicontrol/telemetry/` | `KoL/data/telemetry/` |
 | ML models | `dalicontrol/models/` | `KoL/data/models/` |
+| Participant profiles | `dalicontrol/profiles/` | `KoL/data/profiles/` |
+| profiles.json | `dalicontrol/profiles.json` | `KoL/data/profiles.json` |
 | settings.json | `dalicontrol/settings.json` | `KoL/data/settings.json` |
 | preferences.json | `dalicontrol/preferences.json` | `KoL/data/preferences.json` |
 | state.json | `dalicontrol/state.json` | `KoL/data/state.json` |
@@ -141,7 +143,8 @@ The installer:
 - Copies the application to Program Files
 - Creates Start Menu shortcuts
 - Optional desktop shortcut
-- Creates writable `data/` directory with user permissions
+- Creates writable `data/`, `data/telemetry`, `data/models`, and `data/profiles`
+  directories with user permissions
 - On uninstall, asks whether to keep user data
 
 ---
@@ -227,15 +230,19 @@ Python or development tools installed.
 - [ ] **Installation**: Run `KoL-Setup-{version}.exe` — installs without errors
 - [ ] **Dry-run launch**: Run `KoL.exe --dry-run` — server starts, browser opens
 - [ ] **Dashboard loads**: `http://localhost:8080` shows the dark-themed UI
+- [ ] **Profile gate**: Dashboard opens with the blocking profile picker before controls are used
+- [ ] **Initial participant info**: Create a profile and confirm `data/profiles/{profile_id}/participant_info.json` is written
+- [ ] **Profile model path**: Train AI models and confirm model files are written under `data/profiles/{profile_id}/models/`
+- [ ] **Final evaluation**: Use **Answer Final Evaluation** and confirm a timestamped JSON appears in `data/profiles/{profile_id}/final_evaluations/`
 - [ ] **Static assets**: CSS styling renders correctly, sliders and buttons visible
 - [ ] **WebSocket**: Live status updates appear (sensor data refreshes every 5s)
 - [ ] **Controls**: Brightness slider and CCT slider respond (dry-run: logged to console)
 - [ ] **Settings panel**: Opens, saves, persists after restart
-- [ ] **Preferences wizard**: Completes all 4 steps, saves to `data/preferences.json`
 - [ ] **Telemetry**: After running for 30s+, a CSV appears in `data/telemetry/`
+- [ ] **Telemetry profile tags**: New telemetry rows include `profile_id` and `profile_name`
 - [ ] **Telemetry charts**: Load a telemetry run in the dashboard — charts render
 - [ ] **Mode switch**: Toggle Manual ↔ AI mode in the dashboard
-- [ ] **Data persistence**: Stop and restart — settings, preferences, and state.json survive
-- [ ] **Rebuild survives**: Re-run installer — user data in `data/` not overwritten
+- [ ] **Data persistence**: Stop and restart — active profile, final evaluation files, settings, and state.json survive
+- [ ] **Rebuild survives**: Re-run installer — user data in `data/`, especially `data/profiles`, is not overwritten
 - [ ] **Hardware (if available)**: Connect ESP32 + DALI controller, run with `--sensor-port COM3`
 - [ ] **Uninstall**: Uninstall via Windows — prompted about keeping data

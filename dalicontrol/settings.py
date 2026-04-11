@@ -25,6 +25,9 @@ _RANGES: Dict[str, tuple] = {
     "eval_interval": (30, 3600),
     "brightness_threshold": (1, 50),
     "cct_threshold": (10, 1000),
+    "dali_command_gap_s": (0.0, 10.0),
+    "brightness_feedback_window_s": (0.0, 30.0),
+    "brightness_feedback_min_lux_delta": (0.0, 100.0),
     "nominal_power_watts": (1.0, 500.0),
 }
 
@@ -40,6 +43,9 @@ class Settings:
     eval_interval: int = 300           # seconds between AI evaluations
     brightness_threshold: int = 5      # minimum % change to trigger adjustment
     cct_threshold: int = 100           # minimum Kelvin change to trigger adjustment
+    dali_command_gap_s: float = 0.75   # settle time between CCT and brightness sends
+    brightness_feedback_window_s: float = 2.5  # seconds to observe lux after brightness
+    brightness_feedback_min_lux_delta: float = 3.0  # minimum lux_smooth movement to confirm
 
     # Energy estimation
     nominal_power_watts: float = 40.0
@@ -90,7 +96,14 @@ class Settings:
                     continue
 
                 # Type coercion
-                if key in ("dim_delay", "absence_timeout", "nominal_power_watts"):
+                if key in (
+                    "dim_delay",
+                    "absence_timeout",
+                    "dali_command_gap_s",
+                    "brightness_feedback_window_s",
+                    "brightness_feedback_min_lux_delta",
+                    "nominal_power_watts",
+                ):
                     val = float(val)
                 elif key in ("dim_level", "eval_interval", "brightness_threshold", "cct_threshold"):
                     val = int(val)

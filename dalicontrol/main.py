@@ -15,6 +15,7 @@ from .dali_controls import DaliControls
 from .dali_transport import DaliHidTransport
 from .lamp_state import LampController
 from .paths import TELEM_DIR
+from .profiles import get_active_profile, preference_adapter_for, profile_model_dir
 from .settings import Settings
 from .usb_occupancy import UsbOccupancyReader
 
@@ -32,6 +33,8 @@ class TelemetryLogger:
         "ts_epoch",
         "ts_iso",
         "mode",
+        "profile_id",
+        "profile_name",
         "raw_present",
         "filt_occupied",
         "moving",
@@ -107,6 +110,8 @@ def build_row(
     user_text: str = "",
     circadian_phase: str = "",
     weather_context: str = "",
+    profile_id: str = "",
+    profile_name: str = "",
 ) -> dict:
     now_epoch = time.time()
     now_iso = datetime.fromtimestamp(now_epoch).isoformat(timespec="seconds")
@@ -118,6 +123,8 @@ def build_row(
         "ts_epoch": round(now_epoch, 3),
         "ts_iso": now_iso,
         "mode": mode,
+        "profile_id": profile_id,
+        "profile_name": profile_name,
         "raw_present": getattr(snap, "raw_present", None),
         "filt_occupied": getattr(snap, "filt_occupied", None),
         "moving": getattr(snap, "moving", None),
@@ -267,10 +274,22 @@ def main():
             "decisions_lock": _decisions_lock,
         }
 
-        # ---- Load user preferences ----
-        from .preferences import UserPreferences
-        preferences = UserPreferences.load()
+        # ---- Load active participant profile ----
+        active_profile = get_active_profile()
+        preferences = preference_adapter_for(active_profile["profile_id"]) if active_profile else None
+        model_dir = profile_model_dir(active_profile["profile_id"]) if active_profile else None
+        if model_dir:
+            model_dir.mkdir(parents=True, exist_ok=True)
+        app_state["active_profile"] = active_profile
         app_state["preferences"] = preferences
+        app_state["profile_model_dir"] = model_dir
+
+        def active_profile_fields():
+            profile = app_state.get("active_profile") or {}
+            return {
+                "profile_id": profile.get("profile_id", ""),
+                "profile_name": profile.get("display_name", ""),
+            }
 
         # ---- Adaptive engine (for AI mode) ----
         adaptive_engine = None
@@ -280,9 +299,12 @@ def main():
                 lamp, lamp_lock,
                 settings=settings,
                 preferences=preferences,
+                model_dir=model_dir,
+                profile_id=active_profile["profile_id"] if active_profile else "",
+                profile_name=active_profile["display_name"] if active_profile else "",
             )
             # Try to load existing models, otherwise train
-            if not adaptive_engine.load_models():
+            if active_profile and not adaptive_engine.load_models():
                 adaptive_engine.train_from_baseline()
 
             def on_adaptive_action(action_str, reason_str, rationale_str="", context=None):
@@ -294,6 +316,7 @@ def main():
                     rationale=rationale_str,
                     circadian_phase=context.get("circadian_phase", "") if context else "",
                     weather_context=context.get("weather", "") if context else "",
+                    **active_profile_fields(),
                 ))
                 record_decision(
                     action=action_str, reason=reason_str,
@@ -333,6 +356,7 @@ def main():
                     telem.log_row(build_row(
                         mode=app_state["mode"], snap=snap, lamp=lamp,
                         runtime_tracker=runtime_tracker,
+                        **active_profile_fields(),
                     ))
                     last_telem_at = now
 
@@ -390,6 +414,7 @@ def main():
                             action="user_command",
                             reason="user_text",
                             user_text=user_text,
+                            **active_profile_fields(),
                         )
                     )
 

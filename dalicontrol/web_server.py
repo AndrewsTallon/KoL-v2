@@ -30,6 +30,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .cct_utils import dtr_to_kelvin, kelvin_to_dtr, level_to_pct
 from .energy_estimator import estimate_energy
 from .paths import STATIC_DIR, TELEM_DIR
+from .profiles import (
+    create_profile,
+    get_active_profile,
+    get_participant_info,
+    list_final_evaluations,
+    list_profiles,
+    preference_adapter_for,
+    profile_model_dir,
+    save_final_evaluation,
+    save_participant_info,
+    select_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +116,56 @@ class SettingsRequest(BaseModel):
     eval_interval: Optional[int] = None
     brightness_threshold: Optional[int] = None
     cct_threshold: Optional[int] = None
+    dali_command_gap_s: Optional[float] = None
+    brightness_feedback_window_s: Optional[float] = None
+    brightness_feedback_min_lux_delta: Optional[float] = None
     nominal_power_watts: Optional[float] = None
     weather_api_key: Optional[str] = None
     weather_location: Optional[str] = None
+
+
+class CreateProfileRequest(BaseModel):
+    display_name: str
+    participant_info: dict
+
+
+class SelectProfileRequest(BaseModel):
+    profile_id: str
+
+
+def _profile_fields(app_state: dict) -> dict:
+    profile = app_state.get("active_profile") or {}
+    return {
+        "profile_id": profile.get("profile_id", ""),
+        "profile_name": profile.get("display_name", ""),
+    }
+
+
+def _activate_profile(app_state: dict, profile: dict) -> dict:
+    """Apply a selected profile to app state and the running adaptive engine."""
+    profile_id = profile["profile_id"]
+    prefs = preference_adapter_for(profile_id)
+    model_dir = profile_model_dir(profile_id)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    app_state["active_profile"] = profile
+    app_state["preferences"] = prefs
+    app_state["profile_model_dir"] = model_dir
+
+    engine = app_state.get("adaptive_engine")
+    if engine:
+        engine.set_profile_context(
+            preferences=prefs,
+            model_dir=model_dir,
+            profile_id=profile_id,
+            profile_name=profile["display_name"],
+        )
+        engine.load_models()
+
+    return {
+        "profile": profile,
+        "participant_info": get_participant_info(profile_id),
+    }
 
 
 def create_app(app_state: dict) -> FastAPI:
@@ -179,6 +238,7 @@ def create_app(app_state: dict) -> FastAPI:
             "auto": app_state["auto"],
             "nominal_power_watts": app_state["nominal_power_watts"],
             "runtime_s": app_state["runtime_tracker"].get("total_s", 0),
+            "profile": app_state.get("active_profile"),
         }
 
     # ---- Lamp Control ----
@@ -227,16 +287,17 @@ def create_app(app_state: dict) -> FastAPI:
                 # Lazy-create engine if it doesn't exist yet
                 if engine is None:
                     from .adaptive_engine import AdaptiveEngine
-                    from .preferences import UserPreferences
+                    active_profile = app_state.get("active_profile")
                     prefs = app_state.get("preferences")
-                    if not prefs:
-                        prefs = UserPreferences.load()
-                        app_state["preferences"] = prefs
+                    model_dir = app_state.get("profile_model_dir")
                     engine = AdaptiveEngine(
                         app_state["lamp"],
                         app_state["lamp_lock"],
                         settings=app_state.get("settings"),
                         preferences=prefs,
+                        model_dir=model_dir,
+                        profile_id=active_profile["profile_id"] if active_profile else "",
+                        profile_name=active_profile["display_name"] if active_profile else "",
                     )
 
                     # Wire up the telemetry callback
@@ -256,6 +317,7 @@ def create_app(app_state: dict) -> FastAPI:
                                 rationale=rationale_str,
                                 circadian_phase=context.get("circadian_phase", "") if context else "",
                                 weather_context=context.get("weather", "") if context else "",
+                                **_profile_fields(app_state),
                             ))
                         record_decision(
                             action=action_str, reason=reason_str,
@@ -268,7 +330,7 @@ def create_app(app_state: dict) -> FastAPI:
                     app_state["adaptive_engine"] = engine
 
                 reader = app_state["reader"]
-                if not engine._models_loaded:
+                if app_state.get("active_profile") and not engine._models_loaded:
                     engine.load_models() or engine.train_from_baseline()
                 engine.start(reader)
             elif engine:
@@ -316,30 +378,115 @@ def create_app(app_state: dict) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
-    # ---- User Preferences ----
+    # ---- Participant Profiles ----
+
+    @app.get("/api/profiles")
+    async def get_profiles():
+        return list_profiles()
+
+    @app.post("/api/profiles")
+    async def create_profile_endpoint(req: CreateProfileRequest):
+        try:
+            profile = create_profile(req.display_name, req.participant_info)
+            return {"ok": True, **_activate_profile(app_state, profile)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.post("/api/profiles/select")
+    async def select_profile_endpoint(req: SelectProfileRequest):
+        try:
+            profile = select_profile(req.profile_id)
+            return {"ok": True, **_activate_profile(app_state, profile)}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+
+    @app.get("/api/profile/current")
+    async def get_current_profile():
+        profile = app_state.get("active_profile") or get_active_profile()
+        if profile:
+            if not app_state.get("active_profile"):
+                _activate_profile(app_state, profile)
+            return {
+                "profile": profile,
+                "participant_info": get_participant_info(profile["profile_id"]),
+                "final_evaluations": list_final_evaluations(profile["profile_id"]),
+            }
+        return JSONResponse({"error": "No active profile"}, status_code=409)
+
+    @app.get("/api/profile/participant-info")
+    async def get_profile_participant_info():
+        profile = app_state.get("active_profile")
+        if not profile:
+            return JSONResponse({"error": "No active profile"}, status_code=409)
+        return get_participant_info(profile["profile_id"]) or {}
+
+    @app.post("/api/profile/participant-info")
+    async def update_profile_participant_info(req: dict):
+        profile = app_state.get("active_profile")
+        if not profile:
+            return JSONResponse({"error": "No active profile"}, status_code=409)
+        try:
+            participant_info = save_participant_info(profile["profile_id"], req)
+            app_state["preferences"] = preference_adapter_for(profile["profile_id"])
+            engine = app_state.get("adaptive_engine")
+            if engine:
+                engine.preferences = app_state["preferences"]
+            return {"ok": True, "participant_info": participant_info}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    @app.get("/api/profile/final-evaluations")
+    async def get_profile_final_evaluations():
+        profile = app_state.get("active_profile")
+        if not profile:
+            return JSONResponse({"error": "No active profile"}, status_code=409)
+        return {"evaluations": list_final_evaluations(profile["profile_id"])}
+
+    @app.post("/api/profile/final-evaluations")
+    async def create_profile_final_evaluation(req: dict):
+        profile = app_state.get("active_profile")
+        if not profile:
+            return JSONResponse({"error": "No active profile"}, status_code=409)
+        telem = app_state.get("telem")
+        telemetry_run = getattr(getattr(telem, "path", None), "name", "")
+        try:
+            evaluation = save_final_evaluation(
+                profile["profile_id"],
+                req,
+                mode=app_state.get("mode", ""),
+                telemetry_run=telemetry_run,
+            )
+            return {"ok": True, "evaluation": evaluation}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # ---- User Preferences (legacy compatibility) ----
 
     @app.get("/api/preferences")
     async def get_preferences():
-        prefs = app_state.get("preferences")
-        if not prefs:
-            from .preferences import UserPreferences
-            prefs = UserPreferences.load()
-            app_state["preferences"] = prefs
-        return prefs.to_dict()
+        profile = app_state.get("active_profile")
+        if not profile:
+            return JSONResponse({"error": "No active profile"}, status_code=409)
+        info = get_participant_info(profile["profile_id"]) or {}
+        return {
+            "completed": bool(info),
+            "participant_info": info,
+        }
 
     @app.post("/api/preferences")
     async def update_preferences(req: dict):
-        prefs = app_state.get("preferences")
-        if not prefs:
-            from .preferences import UserPreferences
-            prefs = UserPreferences.load()
-            app_state["preferences"] = prefs
-        new_state = prefs.update(req)
-        # Push updated preferences to adaptive engine if running
-        engine = app_state.get("adaptive_engine")
-        if engine:
-            engine.preferences = prefs
-        return {"ok": True, "preferences": new_state}
+        profile = app_state.get("active_profile")
+        if not profile:
+            return JSONResponse({"error": "No active profile"}, status_code=409)
+        try:
+            participant_info = save_participant_info(profile["profile_id"], req)
+            app_state["preferences"] = preference_adapter_for(profile["profile_id"])
+            engine = app_state.get("adaptive_engine")
+            if engine:
+                engine.preferences = app_state["preferences"]
+            return {"ok": True, "preferences": participant_info}
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     # ---- Telemetry ----
 
@@ -422,6 +569,8 @@ def create_app(app_state: dict) -> FastAPI:
         engine = app_state.get("adaptive_engine")
         if not engine:
             return JSONResponse({"error": "No adaptive engine"}, status_code=400)
+        if not app_state.get("active_profile"):
+            return JSONResponse({"error": "Select a profile before training"}, status_code=409)
         success = engine.train_from_baseline()
         return {"ok": success}
 
@@ -474,6 +623,7 @@ def create_app(app_state: dict) -> FastAPI:
                     "runtime_s": app_state["runtime_tracker"].get("total_s", 0),
                     "energy_est_wh": app_state["runtime_tracker"].get("energy_wh", 0),
                     "last_decision": last_decision,
+                    "profile": app_state.get("active_profile"),
                     "ts": time.time(),
                 }
 

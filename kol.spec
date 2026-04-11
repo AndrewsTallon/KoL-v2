@@ -75,6 +75,7 @@ a = Analysis(
         "dalicontrol.energy_estimator",
         "dalicontrol.settings",
         "dalicontrol.preferences",
+        "dalicontrol.profiles",
         "dalicontrol.paths",
     ],
     hookspath=[],

@@ -391,10 +391,6 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
       if (result) {
         syncModeButtons(mode);
         showToast(`Switched to ${mode === 'ai' ? 'AI Adaptive' : 'Manual'} mode`, 'success');
-        // On first AI activation, check if preferences are completed
-        if (mode === 'ai') {
-          checkPreferencesOnAiActivation();
-        }
       } else {
         btn.classList.remove('loading');
         showToast('Failed to switch mode', 'error');
@@ -424,7 +420,9 @@ document.getElementById('trainBtn').onclick = async () => {
   const status = document.getElementById('trainStatus');
   status.textContent = 'Training...';
   const result = await apiPost('/api/ai/train', {});
-  status.textContent = result && result.ok ? 'Models trained successfully!' : 'Training failed.';
+  status.textContent = result && result.ok
+    ? 'Models trained successfully!'
+    : (result && result.error ? result.error : 'Training failed.');
 };
 
 // Download CSV
@@ -581,6 +579,9 @@ const settingsFields = {
   eval_interval: 'sEvalInterval',
   brightness_threshold: 'sBrightnessThreshold',
   cct_threshold: 'sCctThreshold',
+  dali_command_gap_s: 'sDaliCommandGap',
+  brightness_feedback_window_s: 'sBrightnessFeedbackWindow',
+  brightness_feedback_min_lux_delta: 'sBrightnessFeedbackMinLux',
   nominal_power_watts: 'sNominalPower',
   weather_api_key: 'sWeatherApiKey',
   weather_location: 'sWeatherLocation',
@@ -623,177 +624,275 @@ document.getElementById('settingsSaveBtn').onclick = async () => {
   }
 };
 
-// ---- Preferences Questionnaire Modal ----
+// ---- Participant Profiles and Questionnaires ----
 
-const prefsModal = document.getElementById('preferencesModal');
-let wizardStep = 1;
-const totalSteps = 4;
+let activeProfile = null;
 
-function openPrefsModal() {
-  // Load current preferences first
-  apiGet('/api/preferences').then(prefs => {
-    if (prefs) {
-      populatePrefsForm(prefs);
-    }
-    prefsModal.style.display = 'flex';
-    setWizardStep(1);
-  });
+const AGE_OPTIONS = ['18-29', '30-39', '40-49', '50-59', '60+'];
+const FINAL_QUESTIONS = [
+  ['q1', 'The brightness level of the lighting was appropriate for my work tasks.'],
+  ['q2', 'The lighting provided sufficient illumination at my workstation.'],
+  ['q3', 'The lighting conditions were visually comfortable during my work.'],
+  ['q4', 'The lighting did not cause glare or visual discomfort.'],
+  ['q5', 'The lighting conditions remained stable and comfortable during my work.'],
+  ['q6', 'The color tone of the light (warm or cool) felt appropriate for my work activities.'],
+  ['q7', 'Overall, I am satisfied with the lighting conditions at my workstation.'],
+  ['q8', 'I noticed changes in the lighting conditions during my work.'],
+  ['q9', 'The lighting changes were disturbing.'],
+  ['q10', 'AI Phase Only: Compared to the previous lighting control, I prefer the adaptive lighting system.'],
+];
+
+function participantInfoFields(prefix) {
+  const ageOptions = AGE_OPTIONS.map(age =>
+    `<option value="${age}">${age}</option>`
+  ).join('');
+  return `
+    <div class="pref-field">
+      <label for="${prefix}AgeGroup">Age group</label>
+      <select id="${prefix}AgeGroup" required>
+        <option value="">Select age group</option>
+        ${ageOptions}
+      </select>
+    </div>
+    <div class="pref-field">
+      <label>Do you normally use glasses or contact lenses while working?</label>
+      <div class="pref-radio-group">
+        <label class="pref-radio"><input type="radio" name="${prefix}Glasses" value="yes" required> Yes</label>
+        <label class="pref-radio"><input type="radio" name="${prefix}Glasses" value="no" required> No</label>
+      </div>
+    </div>
+    <div class="pref-field">
+      <label>I generally prefer brighter lighting while working.</label>
+      ${likertRadios(`${prefix}BrighterPreference`, true)}
+    </div>
+  `;
 }
 
-function closePrefsModal() {
-  prefsModal.style.display = 'none';
+function likertRadios(name, required = false) {
+  return `<div class="likert-row">${[1, 2, 3, 4, 5].map(v => `
+    <label class="likert-option">
+      <input type="radio" name="${name}" value="${v}" ${required ? 'required' : ''}>
+      <span>${v}</span>
+    </label>
+  `).join('')}</div>`;
 }
 
-function populatePrefsForm(p) {
-  document.getElementById('prefWakeTime').value = p.wake_time || '07:00';
-  document.getElementById('prefSleepTime').value = p.sleep_time || '23:00';
-  document.getElementById('prefWorkStart').value = p.work_start || '09:00';
-  document.getElementById('prefWorkEnd').value = p.work_end || '17:00';
-
-  setSliderVal('prefMorningBrightness', p.morning_brightness || 70);
-  setSliderVal('prefMiddayBrightness', p.midday_brightness || 60);
-  setSliderVal('prefEveningBrightness', p.evening_brightness || 50);
-  setSliderVal('prefNightBrightness', p.night_brightness || 30);
-
-  setSliderVal('prefMorningCCT', p.morning_cct || 4000);
-  setSliderVal('prefMiddayCCT', p.midday_cct || 5500);
-  setSliderVal('prefEveningCCT', p.evening_cct || 3000);
-  setSliderVal('prefNightCCT', p.night_cct || 2700);
-
-  const warmCoolRadios = document.querySelectorAll('input[name="warmCoolPref"]');
-  warmCoolRadios.forEach(r => { r.checked = r.value === (p.warm_cool_preference || 'neutral'); });
-
-  const sensitivityRadios = document.querySelectorAll('input[name="changeSensitivity"]');
-  sensitivityRadios.forEach(r => { r.checked = r.value === (p.change_sensitivity || 'medium'); });
-}
-
-function setSliderVal(id, val) {
-  const slider = document.getElementById(id);
-  if (slider) {
-    slider.value = val;
-    const valEl = document.getElementById(id + 'Val');
-    if (valEl) valEl.textContent = val;
-  }
-}
-
-function setWizardStep(step) {
-  wizardStep = step;
-  document.querySelectorAll('.wizard-page').forEach(p => p.classList.remove('active'));
-  document.getElementById('wizardStep' + step).classList.add('active');
-
-  document.querySelectorAll('.wizard-step').forEach(s => {
-    const sStep = parseInt(s.dataset.step);
-    s.classList.toggle('active', sStep === step);
-    s.classList.toggle('completed', sStep < step);
-  });
-
-  document.getElementById('wizardPrevBtn').style.visibility = step === 1 ? 'hidden' : 'visible';
-  document.getElementById('wizardNextBtn').textContent = step === totalSteps ? 'Save' : 'Next';
-}
-
-function collectPrefsData() {
-  const warmCool = document.querySelector('input[name="warmCoolPref"]:checked');
-  const sensitivity = document.querySelector('input[name="changeSensitivity"]:checked');
-
+function collectParticipantInfo(prefix) {
+  const glasses = document.querySelector(`input[name="${prefix}Glasses"]:checked`);
+  const brighter = document.querySelector(`input[name="${prefix}BrighterPreference"]:checked`);
   return {
-    wake_time: document.getElementById('prefWakeTime').value,
-    sleep_time: document.getElementById('prefSleepTime').value,
-    work_start: document.getElementById('prefWorkStart').value,
-    work_end: document.getElementById('prefWorkEnd').value,
-    morning_brightness: parseInt(document.getElementById('prefMorningBrightness').value),
-    midday_brightness: parseInt(document.getElementById('prefMiddayBrightness').value),
-    evening_brightness: parseInt(document.getElementById('prefEveningBrightness').value),
-    night_brightness: parseInt(document.getElementById('prefNightBrightness').value),
-    warm_cool_preference: warmCool ? warmCool.value : 'neutral',
-    morning_cct: parseInt(document.getElementById('prefMorningCCT').value),
-    midday_cct: parseInt(document.getElementById('prefMiddayCCT').value),
-    evening_cct: parseInt(document.getElementById('prefEveningCCT').value),
-    night_cct: parseInt(document.getElementById('prefNightCCT').value),
-    change_sensitivity: sensitivity ? sensitivity.value : 'medium',
-    completed: true,
+    age_group: document.getElementById(`${prefix}AgeGroup`).value,
+    glasses_or_contacts: glasses ? glasses.value : '',
+    brighter_lighting_preference: brighter ? parseInt(brighter.value) : null,
   };
 }
 
-async function savePreferences() {
-  const data = collectPrefsData();
-  const result = await apiPost('/api/preferences', data);
+function populateParticipantInfo(prefix, info) {
+  if (!info) return;
+  document.getElementById(`${prefix}AgeGroup`).value = info.age_group || '';
+  const glasses = document.querySelector(`input[name="${prefix}Glasses"][value="${info.glasses_or_contacts}"]`);
+  if (glasses) glasses.checked = true;
+  const brighter = document.querySelector(
+    `input[name="${prefix}BrighterPreference"][value="${info.brighter_lighting_preference}"]`
+  );
+  if (brighter) brighter.checked = true;
+}
+
+function renderProfileList(profiles) {
+  const list = document.getElementById('profileList');
+  list.innerHTML = '';
+  if (!profiles || profiles.length === 0) {
+    list.innerHTML = '<p class="empty-state">No profiles yet.</p>';
+    return;
+  }
+  profiles.forEach(profile => {
+    const btn = document.createElement('button');
+    btn.className = 'profile-list-item';
+    btn.type = 'button';
+    btn.textContent = profile.display_name;
+    btn.onclick = () => selectProfile(profile.profile_id);
+    list.appendChild(btn);
+  });
+}
+
+function updateProfileUi(profile) {
+  activeProfile = profile || null;
+  document.getElementById('activeProfileName').textContent =
+    activeProfile ? activeProfile.display_name : 'None';
+  const status = document.getElementById('profileModelStatus');
+  if (status) {
+    status.textContent = activeProfile
+      ? `Active profile: ${activeProfile.display_name}`
+      : 'Select a participant profile before training.';
+  }
+}
+
+async function loadProfiles(showGateIfMissing = true) {
+  const data = await apiGet('/api/profiles');
+  if (!data) return;
+  renderProfileList(data.profiles || []);
+  const active = (data.profiles || []).find(p => p.profile_id === data.active_profile_id);
+  if (active) {
+    updateProfileUi(active);
+    if (showGateIfMissing) {
+      document.getElementById('profileGateOverlay').style.display = 'none';
+    }
+    await loadFinalEvaluationStatus();
+  } else if (showGateIfMissing) {
+    updateProfileUi(null);
+    document.getElementById('profileGateOverlay').style.display = 'flex';
+  }
+}
+
+async function selectProfile(profileId) {
+  const result = await apiPost('/api/profiles/select', { profile_id: profileId });
   if (result && result.ok) {
-    showToast('Lighting preferences saved', 'success');
-    closePrefsModal();
-    updatePrefsStatus(true);
+    updateProfileUi(result.profile);
+    document.getElementById('profileGateOverlay').style.display = 'none';
+    await loadProfiles(false);
+    await loadFinalEvaluationStatus();
+    showToast('Profile selected', 'success');
   } else {
-    showToast('Failed to save preferences', 'error');
+    showToast(result && result.error ? result.error : 'Failed to select profile', 'error');
   }
 }
 
-function updatePrefsStatus(completed) {
-  const statusEl = document.getElementById('prefsStatus');
-  if (statusEl) {
-    statusEl.textContent = completed ? 'Preferences configured' : 'Not configured';
-    statusEl.className = 'prefs-status ' + (completed ? 'configured' : 'not-configured');
-  }
-}
-
-async function checkPreferencesOnAiActivation() {
-  const prefs = await apiGet('/api/preferences');
-  if (prefs && !prefs.completed) {
-    openPrefsModal();
-  }
-  updatePrefsStatus(prefs && prefs.completed);
-}
-
-// Wizard navigation
-document.getElementById('wizardNextBtn').onclick = () => {
-  if (wizardStep < totalSteps) {
-    setWizardStep(wizardStep + 1);
+document.getElementById('createProfileForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const payload = {
+    display_name: document.getElementById('newProfileName').value.trim(),
+    participant_info: collectParticipantInfo('create'),
+  };
+  const result = await apiPost('/api/profiles', payload);
+  if (result && result.ok) {
+    document.getElementById('createProfileForm').reset();
+    updateProfileUi(result.profile);
+    document.getElementById('profileGateOverlay').style.display = 'none';
+    await loadProfiles(false);
+    await loadFinalEvaluationStatus();
+    showToast('Profile created', 'success');
   } else {
-    savePreferences();
+    showToast(result && result.error ? result.error : 'Failed to create profile', 'error');
   }
 };
 
-document.getElementById('wizardPrevBtn').onclick = () => {
-  if (wizardStep > 1) {
-    setWizardStep(wizardStep - 1);
+document.getElementById('switchProfileBtn').onclick = () => {
+  loadProfiles(false);
+  document.getElementById('profileGateOverlay').style.display = 'flex';
+};
+
+async function openParticipantInfoModal() {
+  if (!activeProfile) {
+    document.getElementById('profileGateOverlay').style.display = 'flex';
+    return;
+  }
+  const info = await apiGet('/api/profile/participant-info');
+  document.getElementById('participantInfoForm').reset();
+  populateParticipantInfo('edit', info);
+  document.getElementById('participantInfoModal').style.display = 'flex';
+}
+
+function closeParticipantInfoModal() {
+  document.getElementById('participantInfoModal').style.display = 'none';
+}
+
+document.getElementById('participantInfoForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const result = await apiPost('/api/profile/participant-info', collectParticipantInfo('edit'));
+  if (result && result.ok) {
+    closeParticipantInfoModal();
+    showToast('Participant info saved', 'success');
+  } else {
+    showToast(result && result.error ? result.error : 'Failed to save participant info', 'error');
   }
 };
 
-document.getElementById('prefsCloseBtn').onclick = closePrefsModal;
-prefsModal.onclick = (e) => {
-  if (e.target === prefsModal) closePrefsModal();
+document.getElementById('participantInfoCloseBtn').onclick = closeParticipantInfoModal;
+document.getElementById('participantInfoCancelBtn').onclick = closeParticipantInfoModal;
+document.getElementById('settingsParticipantInfoBtn').onclick = openParticipantInfoModal;
+
+function renderFinalQuestions() {
+  const container = document.getElementById('finalQuestionFields');
+  container.innerHTML = FINAL_QUESTIONS.map(([key, text]) => `
+    <div class="final-question">
+      <label>${key.toUpperCase()}. ${text}</label>
+      ${likertRadios(key, true)}
+    </div>
+  `).join('');
+}
+
+function collectFinalEvaluation() {
+  const payload = {};
+  FINAL_QUESTIONS.forEach(([key]) => {
+    const selected = document.querySelector(`input[name="${key}"]:checked`);
+    payload[key] = selected ? parseInt(selected.value) : null;
+  });
+  payload.comments = document.getElementById('finalComments').value.trim();
+  return payload;
+}
+
+function closeFinalEvaluationModal() {
+  document.getElementById('finalEvaluationModal').style.display = 'none';
+}
+
+async function loadFinalEvaluationStatus() {
+  const status = document.getElementById('finalEvalStatus');
+  if (!activeProfile) {
+    status.textContent = 'No active profile';
+    return;
+  }
+  const data = await apiGet('/api/profile/final-evaluations');
+  const evaluations = data && data.evaluations ? data.evaluations : [];
+  if (evaluations.length === 0) {
+    status.textContent = 'No final evaluation submitted yet';
+  } else {
+    const last = evaluations[0];
+    status.textContent = `Last submitted: ${last.submitted_at || last.filename}`;
+  }
+}
+
+document.getElementById('finalEvalBtn').onclick = () => {
+  if (!activeProfile) {
+    document.getElementById('profileGateOverlay').style.display = 'flex';
+    return;
+  }
+  document.getElementById('finalEvaluationForm').reset();
+  document.getElementById('finalEvaluationModal').style.display = 'flex';
 };
 
-// Open preferences from AI panel and settings panel
-document.getElementById('openPrefsBtn').onclick = openPrefsModal;
-document.getElementById('settingsPrefsBtn').onclick = openPrefsModal;
-
-// Wizard step indicators are clickable
-document.querySelectorAll('.wizard-step').forEach(s => {
-  s.onclick = () => setWizardStep(parseInt(s.dataset.step));
-});
-
-// Bind slider value displays
-['prefMorningBrightness', 'prefMiddayBrightness', 'prefEveningBrightness', 'prefNightBrightness',
- 'prefMorningCCT', 'prefMiddayCCT', 'prefEveningCCT', 'prefNightCCT'].forEach(id => {
-  const slider = document.getElementById(id);
-  if (slider) {
-    slider.oninput = () => {
-      const valEl = document.getElementById(id + 'Val');
-      if (valEl) valEl.textContent = slider.value;
-    };
+document.getElementById('finalEvaluationForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const result = await apiPost('/api/profile/final-evaluations', collectFinalEvaluation());
+  if (result && result.ok) {
+    closeFinalEvaluationModal();
+    await loadFinalEvaluationStatus();
+    showToast('Final evaluation saved', 'success');
+  } else {
+    showToast(result && result.error ? result.error : 'Failed to save final evaluation', 'error');
   }
-});
+};
+
+document.getElementById('finalEvalCloseBtn').onclick = closeFinalEvaluationModal;
+document.getElementById('finalEvalCancelBtn').onclick = closeFinalEvaluationModal;
+
+document.getElementById('participantInfoModal').onclick = (e) => {
+  if (e.target.id === 'participantInfoModal') closeParticipantInfoModal();
+};
+document.getElementById('finalEvaluationModal').onclick = (e) => {
+  if (e.target.id === 'finalEvaluationModal') closeFinalEvaluationModal();
+};
+
+document.getElementById('createParticipantInfoFields').innerHTML = participantInfoFields('create');
+document.getElementById('editParticipantInfoFields').innerHTML = participantInfoFields('edit');
+renderFinalQuestions();
 
 // ---- Init ----
 connectWS();
 loadRuns();
 loadDecisions();
 loadSettings();
+loadProfiles();
 setInterval(loadDecisions, 30000);
-
-// Load preferences status on init
-apiGet('/api/preferences').then(prefs => {
-  if (prefs) updatePrefsStatus(prefs.completed);
-});
 
 // Fetch initial status
 apiGet('/api/status').then(data => {

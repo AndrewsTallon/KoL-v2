@@ -58,12 +58,18 @@ class AdaptiveEngine:
         settings=None,
         nominal_power_watts: float = 40.0,
         preferences=None,
+        model_dir: Optional[Path] = None,
+        profile_id: str = "",
+        profile_name: str = "",
     ):
         self.lamp = lamp
         self.lamp_lock = lamp_lock
         self.settings = settings
         self.nominal_power_watts = nominal_power_watts
         self.preferences = preferences  # UserPreferences instance (optional)
+        self._model_dir = Path(model_dir) if model_dir else MODELS_DIR
+        self.profile_id = profile_id
+        self.profile_name = profile_name
 
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -127,6 +133,35 @@ class AdaptiveEngine:
     def _dim_delay(self) -> float:
         return self.settings.dim_delay if self.settings else 60.0
 
+    @property
+    def _dali_command_gap_s(self) -> float:
+        return self.settings.dali_command_gap_s if self.settings else 0.75
+
+    @property
+    def _brightness_feedback_window_s(self) -> float:
+        return self.settings.brightness_feedback_window_s if self.settings else 2.5
+
+    @property
+    def _brightness_feedback_min_lux_delta(self) -> float:
+        return self.settings.brightness_feedback_min_lux_delta if self.settings else 3.0
+
+    def set_profile_context(
+        self,
+        *,
+        preferences=None,
+        model_dir: Optional[Path] = None,
+        profile_id: str = "",
+        profile_name: str = "",
+    ) -> None:
+        """Switch the adaptive engine to a different participant profile."""
+        self.preferences = preferences
+        self._model_dir = Path(model_dir) if model_dir else MODELS_DIR
+        self.profile_id = profile_id
+        self.profile_name = profile_name
+        self._brightness_model = None
+        self._cct_model = None
+        self._models_loaded = False
+
     # ---- Training ----
 
     def train_from_baseline(self, csv_paths: Optional[list] = None) -> bool:
@@ -185,9 +220,9 @@ class AdaptiveEngine:
         )
         self._cct_model.fit(features, cct_targets)
 
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self._brightness_model, MODELS_DIR / "brightness_model.joblib")
-        joblib.dump(self._cct_model, MODELS_DIR / "cct_model.joblib")
+        self._model_dir.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self._brightness_model, self._model_dir / "brightness_model.joblib")
+        joblib.dump(self._cct_model, self._model_dir / "cct_model.joblib")
 
         self._models_loaded = True
         logger.info("Adaptive models trained and saved.")
@@ -205,8 +240,8 @@ class AdaptiveEngine:
         except ImportError:
             return False
 
-        brightness_path = MODELS_DIR / "brightness_model.joblib"
-        cct_path = MODELS_DIR / "cct_model.joblib"
+        brightness_path = self._model_dir / "brightness_model.joblib"
+        cct_path = self._model_dir / "cct_model.joblib"
 
         if not brightness_path.exists() or not cct_path.exists():
             return False
@@ -243,6 +278,11 @@ class AdaptiveEngine:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
+                    if self.profile_id:
+                        row_profile = (row.get("profile_id") or "").strip()
+                        if row_profile != self.profile_id:
+                            continue
+
                     if row.get("lamp_is_off", "").lower() in ("true", "1"):
                         continue
                     if row.get("filt_occupied", "").lower() not in ("true", "1"):
@@ -331,7 +371,7 @@ class AdaptiveEngine:
         # User preference nudge (20%): questionnaire values refine
         # the circadian base without overriding it.
         pref_nudge = 0.0
-        if prefs and prefs.completed:
+        if prefs and getattr(prefs, "completed", False):
             pref_brightness = prefs.get_preferred_brightness(hour)
             pref_nudge = 0.2 * (pref_brightness - base_brightness)
             self._brightness_source += " + preferences"
@@ -344,7 +384,11 @@ class AdaptiveEngine:
         # so the questionnaire sharpens the rhythm without overriding it.
         circadian_cct = self._fallback_cct(hour)
 
-        if prefs and prefs.completed:
+        if (
+            prefs
+            and getattr(prefs, "completed", False)
+            and getattr(prefs, "supports_cct_preference", True)
+        ):
             pref_cct = prefs.get_preferred_cct(hour)
             cct_kelvin = int(round(0.8 * circadian_cct + 0.2 * pref_cct))
             self._cct_source = "circadian + preferences"
@@ -723,6 +767,135 @@ class AdaptiveEngine:
 
     # ---- Apply adaptive lighting with rich context ----
 
+    def _read_feedback_lux_smooth(self) -> Tuple[Optional[float], str]:
+        """Return a fresh lux_smooth sample for coarse brightness feedback."""
+        reader = getattr(self, "_reader", None)
+        if reader is None:
+            return None, "sensor reader unavailable"
+
+        snap = reader.snapshot()
+        lux_smooth = getattr(snap, "lux_smooth", None)
+        if lux_smooth is None:
+            return None, "lux_smooth unavailable"
+
+        updated_at = getattr(snap, "updated_at", 0.0) or 0.0
+        if updated_at <= 0:
+            return None, "sensor timestamp unavailable"
+
+        age_s = time.time() - updated_at
+        max_age_s = max(2.0, self._brightness_feedback_window_s + 1.0)
+        if age_s > max_age_s:
+            return None, f"sensor stale ({age_s:.1f}s old)"
+
+        try:
+            return float(lux_smooth), ""
+        except (TypeError, ValueError):
+            return None, "lux_smooth invalid"
+
+    def _observe_brightness_feedback(
+        self,
+        before_sample: Tuple[Optional[float], str],
+        start_brightness: float,
+        target_brightness: float,
+        intended_level: int,
+        intended_is_off: bool,
+    ) -> Tuple[str, str]:
+        """Observe lux_smooth after a brightness command and retry once if needed."""
+        before_lux, before_reason = before_sample
+        if before_lux is None:
+            return f"unverified ({before_reason})", "unverified"
+
+        window_s = self._brightness_feedback_window_s
+        if window_s > 0:
+            time.sleep(window_s)
+
+        after_lux, after_reason = self._read_feedback_lux_smooth()
+        if after_lux is None:
+            return f"unverified ({after_reason})", "unverified"
+
+        min_delta = self._brightness_feedback_min_lux_delta
+        lux_delta = after_lux - before_lux
+        expected_up = target_brightness >= start_brightness
+        observed_delta = lux_delta if expected_up else -lux_delta
+
+        if observed_delta >= min_delta:
+            return (
+                f"confirmed lux_smooth {before_lux:.1f} -> {after_lux:.1f}",
+                "confirmed",
+            )
+
+        gap_s = self._dali_command_gap_s
+        if gap_s > 0:
+            time.sleep(gap_s)
+
+        with self.lamp_lock:
+            if (
+                self.lamp.state.last_level != intended_level
+                or self.lamp.state.is_off != intended_is_off
+            ):
+                return (
+                    "unverified (brightness changed before retry)",
+                    "superseded",
+                )
+            self.lamp.set_brightness_pct(target_brightness)
+
+        direction = "increase" if expected_up else "decrease"
+        return (
+            f"no {direction} seen ({before_lux:.1f} -> {after_lux:.1f}); retried once",
+            "retried",
+        )
+
+    def _apply_ordered_adjustments(
+        self,
+        *,
+        needs_brightness: bool,
+        needs_cct: bool,
+        rec_brightness: float,
+        rec_cct: int,
+        cur_brightness: float,
+        was_off: bool,
+    ) -> Tuple[list, str, str]:
+        """Send CCT before brightness and verify brightness via coarse sensor feedback."""
+        actions = []
+        feedback_note = ""
+        feedback_status = ""
+
+        before_sample: Tuple[Optional[float], str] = (None, "not sampled")
+        intended_level: Optional[int] = None
+        intended_is_off: Optional[bool] = None
+
+        with self.lamp_lock:
+            if needs_cct:
+                dtr, dtr1 = kelvin_to_dtr(rec_cct)
+                self.lamp.set_temp_raw(dtr, dtr1)
+                self._current_cct_kelvin = rec_cct
+                actions.append(f"set_cct({rec_cct}K)")
+
+            if needs_cct and needs_brightness:
+                gap_s = self._dali_command_gap_s
+                if gap_s > 0:
+                    time.sleep(gap_s)
+
+            if needs_brightness:
+                before_sample = self._read_feedback_lux_smooth()
+                self.lamp.set_brightness_pct(rec_brightness)
+                self._current_brightness_pct = rec_brightness
+                intended_level = self.lamp.state.last_level
+                intended_is_off = self.lamp.state.is_off
+                actions.append(f"set_brightness_pct({rec_brightness:.0f})")
+
+        if needs_brightness and intended_level is not None and intended_is_off is not None:
+            start_brightness = 0.0 if was_off else cur_brightness
+            feedback_note, feedback_status = self._observe_brightness_feedback(
+                before_sample,
+                start_brightness,
+                rec_brightness,
+                intended_level,
+                intended_is_off,
+            )
+
+        return actions, feedback_note, feedback_status
+
     def _apply_adaptive(self, snap, reason: str = "adaptive_eval") -> None:
         """Evaluate and apply lighting adjustments with rich decision context."""
         lux = snap.lux if snap.lux is not None else 300.0
@@ -779,27 +952,32 @@ class AdaptiveEngine:
             "behavior_note": behavior_note,
         }
 
-        actions = []
+        was_off = self.lamp.state.is_off
+        needs_brightness = brightness_delta >= self._brightness_threshold or was_off
+        needs_cct = cct_delta >= self._cct_threshold
 
-        if brightness_delta >= self._brightness_threshold or self.lamp.state.is_off:
-            with self.lamp_lock:
-                self.lamp.set_brightness_pct(rec_brightness)
-            self._current_brightness_pct = rec_brightness
-            actions.append(f"set_brightness_pct({rec_brightness:.0f})")
+        actions, feedback_note, feedback_status = self._apply_ordered_adjustments(
+            needs_brightness=needs_brightness,
+            needs_cct=needs_cct,
+            rec_brightness=rec_brightness,
+            rec_cct=rec_cct,
+            cur_brightness=cur_brightness,
+            was_off=was_off,
+        )
+
+        if needs_brightness:
             logger.info(
                 "ADAPTIVE: Brightness %.0f%% -> %.0f%% (delta=%.1f%%)",
                 cur_brightness, rec_brightness, brightness_delta,
             )
 
-        if cct_delta >= self._cct_threshold:
-            dtr, dtr1 = kelvin_to_dtr(rec_cct)
-            with self.lamp_lock:
-                self.lamp.set_temp_raw(dtr, dtr1)
-            self._current_cct_kelvin = rec_cct
-            actions.append(f"set_cct({rec_cct}K)")
+        if needs_cct:
             logger.info(
                 "ADAPTIVE: CCT %dK -> %dK (delta=%dK)", cur_cct, rec_cct, cct_delta
             )
+
+        if feedback_status:
+            actions.append(f"brightness_feedback({feedback_status})")
 
         # Record behavior
         self._record_behavior(hour, rec_brightness, rec_cct)
@@ -813,6 +991,8 @@ class AdaptiveEngine:
                 f"Brightness {rec_brightness:.0f}%, {temp_desc} {rec_cct}K. "
                 f"{cct_reasoning}"
             )
+            if feedback_note:
+                rationale += f" Brightness feedback: {feedback_note}."
         elif actions:
             rationale = (
                 f"{circadian_phase.capitalize()} ({time_exact}), "
@@ -823,6 +1003,8 @@ class AdaptiveEngine:
             )
             if behavior_note:
                 rationale += f" [{behavior_note}]"
+            if feedback_note:
+                rationale += f" Brightness feedback: {feedback_note}."
         else:
             rationale = (
                 f"No adjustment needed at {time_exact}. "

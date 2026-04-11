@@ -47,6 +47,7 @@ Source: "dist\KoL\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs crea
 Name: "{app}\data"; Permissions: users-modify
 Name: "{app}\data\telemetry"; Permissions: users-modify
 Name: "{app}\data\models"; Permissions: users-modify
+Name: "{app}\data\profiles"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--dry-run"; Comment: "Launch KoL (dry-run mode)"
@@ -68,7 +69,7 @@ begin
   begin
     if DirExists(ExpandConstant('{app}\data')) then
     begin
-      if MsgBox('Keep your telemetry data and settings?' + #13#10 +
+      if MsgBox('Keep your telemetry, profiles, evaluations, and settings?' + #13#10 +
                 'Click Yes to keep the data directory, No to delete it.',
                 mbConfirmation, MB_YESNO) = IDNO then
       begin
