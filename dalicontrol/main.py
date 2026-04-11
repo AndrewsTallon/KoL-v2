@@ -17,7 +17,7 @@ from .lamp_state import LampController
 from .paths import TELEM_DIR
 from .profiles import get_active_profile, preference_adapter_for, profile_model_dir
 from .settings import Settings
-from .usb_occupancy import UsbOccupancyReader
+from .usb_occupancy import UsbOccupancyReader, detect_sensor_port
 
 
 # ---------------- Telemetry ----------------
@@ -195,7 +195,8 @@ def record_decision(
 def parse_args():
     p = argparse.ArgumentParser(description="KoL DALI Lighting Control")
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--sensor-port", required=True)
+    p.add_argument("--sensor-port", default=None,
+                   help="Serial port for ESP32 sensor (e.g. COM3). Auto-detected if omitted.")
     p.add_argument("--sensor-baud", type=int, default=115200)
     p.add_argument("--auto", action="store_true", help="Auto on/off based on occupancy")
     p.add_argument(
@@ -244,8 +245,16 @@ def main():
         # A single lock for ALL lamp actions (sensor thread + AI thread + web)
         lamp_lock = threading.Lock()
 
-        # ---- Sensor reader init ----
-        reader = UsbOccupancyReader(args.sensor_port, args.sensor_baud)
+        # ---- Sensor reader init (auto-detect if port not specified) ----
+        sensor_port = args.sensor_port
+        if not sensor_port and not args.dry_run:
+            sensor_port = detect_sensor_port(baud=args.sensor_baud)
+            if sensor_port:
+                logging.info("Auto-detected ESP32 sensor on %s", sensor_port)
+            else:
+                logging.warning("No ESP32 sensor detected. Sensor data will be unavailable.")
+
+        reader = UsbOccupancyReader(sensor_port or "NONE", args.sensor_baud)
         reader.start()
 
         stop = threading.Event()

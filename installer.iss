@@ -50,12 +50,12 @@ Name: "{app}\data\models"; Permissions: users-modify
 Name: "{app}\data\profiles"; Permissions: users-modify
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--dry-run"; Comment: "Launch KoL (dry-run mode)"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Launch KoL Adaptive Lighting"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--dry-run"; Tasks: desktopicon
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch KoL Adaptive Lighting"; Parameters: "--dry-run"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch KoL Adaptive Lighting"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; Clean up cache/temp files but NOT user data

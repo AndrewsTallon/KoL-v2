@@ -19,16 +19,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  KoL.exe --sensor-port COM3\n"
+            "  KoL.exe                             (auto-detect hardware)\n"
+            "  KoL.exe --sensor-port COM3          (manual port)\n"
             "  KoL.exe --sensor-port COM3 --mode ai\n"
-            "  KoL.exe --dry-run                  (no hardware needed)\n"
+            "  KoL.exe --dry-run                   (no hardware needed)\n"
         ),
     )
     parser.add_argument(
         "--sensor-port",
         default=None,
         help="Serial port for ESP32 sensor (e.g. COM3, COM4). "
-             "Required unless --dry-run is used.",
+             "Auto-detected if not specified.",
     )
     parser.add_argument("--sensor-baud", type=int, default=115200)
     parser.add_argument("--dry-run", action="store_true",
@@ -40,17 +41,11 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.sensor_port and not args.dry_run:
-        parser.error("--sensor-port is required (e.g. --sensor-port COM3). "
-                     "Use --dry-run to run without hardware.")
-
     # Build the argv that dalicontrol.main expects
     sys.argv = ["KoL"]
     if args.sensor_port:
         sys.argv += ["--sensor-port", args.sensor_port]
-    elif args.dry_run:
-        # Provide a dummy port for the required arg; dry-run won't use it
-        sys.argv += ["--sensor-port", "NONE"]
+    # If no port specified, main.py will auto-detect or use "NONE" for dry-run
     sys.argv += ["--sensor-baud", str(args.sensor_baud)]
     sys.argv += ["--mode", args.mode]
     sys.argv += ["--web", "--no-cli"]
