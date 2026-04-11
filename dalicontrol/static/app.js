@@ -4,6 +4,25 @@ const API = '';  // Same origin
 let ws = null;
 let reconnectTimer = null;
 
+const LOADING_MIN_MS = 1400;
+const loadingStartedAt = performance.now();
+
+function finishDashboardLoading() {
+  const overlay = document.getElementById('dashboardLoadingOverlay');
+  if (!overlay) return;
+
+  const elapsed = performance.now() - loadingStartedAt;
+  const wait = Math.max(0, LOADING_MIN_MS - elapsed);
+  window.setTimeout(() => {
+    overlay.classList.add('is-hiding');
+    overlay.addEventListener('transitionend', () => {
+      overlay.hidden = true;
+    }, { once: true });
+  }, wait);
+}
+
+window.addEventListener('load', finishDashboardLoading);
+
 // Chart data buffers
 const MAX_POINTS = 2000;
 const chartData = {
@@ -572,6 +591,13 @@ settingsToggle.onclick = () => {
 };
 
 // Settings field mappings
+const apiSettingsKeys = new Set([
+  'openai_api_key',
+  'openai_model',
+  'weather_api_key',
+  'weather_location',
+]);
+
 const settingsFields = {
   dim_delay: 'sDimDelay',
   dim_level: 'sDimLevel',
@@ -583,39 +609,61 @@ const settingsFields = {
   brightness_feedback_window_s: 'sBrightnessFeedbackWindow',
   brightness_feedback_min_lux_delta: 'sBrightnessFeedbackMinLux',
   nominal_power_watts: 'sNominalPower',
+  openai_api_key: 'sOpenAiApiKey',
+  openai_model: 'sOpenAiModel',
   weather_api_key: 'sWeatherApiKey',
   weather_location: 'sWeatherLocation',
 };
 
-async function loadSettings() {
-  const settings = await apiGet('/api/settings');
-  if (!settings) return;
+const onboardingApiFields = {
+  openai_api_key: 'onboardingOpenAiApiKey',
+  openai_model: 'onboardingOpenAiModel',
+  weather_api_key: 'onboardingWeatherApiKey',
+  weather_location: 'onboardingWeatherLocation',
+};
 
-  for (const [key, elId] of Object.entries(settingsFields)) {
+function populateFieldMap(fieldMap, values) {
+  for (const [key, elId] of Object.entries(fieldMap)) {
     const el = document.getElementById(elId);
-    if (el && settings[key] !== undefined) {
-      el.value = settings[key];
+    if (el && values[key] !== undefined) {
+      el.value = values[key];
     }
   }
 }
 
-document.getElementById('settingsSaveBtn').onclick = async () => {
+function collectSettingsPayload(fieldMap, includeEmptyApiValues = false) {
   const payload = {};
-  for (const [key, elId] of Object.entries(settingsFields)) {
+  for (const [key, elId] of Object.entries(fieldMap)) {
     const el = document.getElementById(elId);
     if (!el) continue;
     const val = el.value;
-    if (val === '' || val === undefined) continue;
 
-    if (['weather_api_key', 'weather_location'].includes(key)) {
+    if (apiSettingsKeys.has(key)) {
+      if (val === '' && !includeEmptyApiValues) continue;
       payload[key] = val;
-    } else {
-      payload[key] = parseFloat(val);
+      continue;
     }
+
+    if (val === '' || val === undefined) continue;
+    payload[key] = parseFloat(val);
   }
+  return payload;
+}
+
+async function loadSettings() {
+  const settings = await apiGet('/api/settings');
+  if (!settings) return;
+  populateFieldMap(settingsFields, settings);
+  populateFieldMap(onboardingApiFields, settings);
+}
+
+document.getElementById('settingsSaveBtn').onclick = async () => {
+  const payload = collectSettingsPayload(settingsFields, true);
 
   const result = await apiPost('/api/settings', payload);
   if (result && result.ok) {
+    populateFieldMap(settingsFields, result.settings || {});
+    populateFieldMap(onboardingApiFields, result.settings || {});
     showToast('Settings saved successfully', 'success');
   } else if (result && result.error) {
     showToast('Error: ' + result.error, 'error');
@@ -747,6 +795,7 @@ async function loadProfiles(showGateIfMissing = true) {
 async function selectProfile(profileId) {
   const result = await apiPost('/api/profiles/select', { profile_id: profileId });
   if (result && result.ok) {
+    if (!await saveOnboardingApiSettings()) return;
     updateProfileUi(result.profile);
     document.getElementById('profileGateOverlay').style.display = 'none';
     await loadProfiles(false);
@@ -765,6 +814,7 @@ document.getElementById('createProfileForm').onsubmit = async (e) => {
   };
   const result = await apiPost('/api/profiles', payload);
   if (result && result.ok) {
+    if (!await saveOnboardingApiSettings()) return;
     document.getElementById('createProfileForm').reset();
     updateProfileUi(result.profile);
     document.getElementById('profileGateOverlay').style.display = 'none';
@@ -775,6 +825,21 @@ document.getElementById('createProfileForm').onsubmit = async (e) => {
     showToast(result && result.error ? result.error : 'Failed to create profile', 'error');
   }
 };
+
+async function saveOnboardingApiSettings() {
+  const payload = collectSettingsPayload(onboardingApiFields, false);
+  if (Object.keys(payload).length === 0) {
+    return true;
+  }
+  const result = await apiPost('/api/settings', payload);
+  if (result && result.ok) {
+    populateFieldMap(settingsFields, result.settings || {});
+    populateFieldMap(onboardingApiFields, result.settings || {});
+    return true;
+  }
+  showToast(result && result.error ? result.error : 'Failed to save API keys', 'error');
+  return false;
+}
 
 document.getElementById('switchProfileBtn').onclick = () => {
   loadProfiles(false);

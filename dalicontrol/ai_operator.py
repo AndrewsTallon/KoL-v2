@@ -65,25 +65,47 @@ class AIOperator:
     Occupancy automation is handled in main.py
     """
 
-    def __init__(self, lamp: LampController, state_path: Path = STATE_PATH, dry_run: bool = False):
+    def __init__(
+        self,
+        lamp: LampController,
+        state_path: Path = STATE_PATH,
+        dry_run: bool = False,
+        settings: Optional[Any] = None,
+    ):
         self.lamp = lamp
         self.state_path = state_path
         self.dry_run = dry_run
+        self.settings = settings
 
         self._action_times: List[float] = []
         self._openai_client = None
         self._openai_available_checked = False
+        self._openai_client_key = ""
 
     # ---------- LLM helpers ----------
+    def _openai_api_key(self) -> str:
+        settings_key = ""
+        if self.settings is not None:
+            settings_key = str(getattr(self.settings, "openai_api_key", "") or "").strip()
+        return settings_key or os.getenv("OPENAI_API_KEY", "").strip()
+
+    def _openai_model(self) -> str:
+        settings_model = ""
+        if self.settings is not None:
+            settings_model = str(getattr(self.settings, "openai_model", "") or "").strip()
+        return settings_model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
     def _get_openai_client(self):
-        if self._openai_available_checked:
+        api_key = self._openai_api_key()
+        if self._openai_available_checked and api_key == self._openai_client_key:
             return self._openai_client
 
         self._openai_available_checked = True
-        api_key = os.getenv("OPENAI_API_KEY")
+        self._openai_client_key = api_key
+        self._openai_client = None
 
         if not api_key:
-            logging.info("OPENAI_API_KEY not set; using rules-based parser.")
+            logging.info("OpenAI API key not set; using rules-based parser.")
             return None
 
         if importlib.util.find_spec("openai") is None:
@@ -140,7 +162,7 @@ class AIOperator:
 
         try:
             response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                model=self._openai_model(),
                 messages=[
                     {
                         "role": "system",

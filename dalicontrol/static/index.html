@@ -9,6 +9,12 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
+  <div class="loading-overlay" id="dashboardLoadingOverlay" role="status" aria-label="Loading dashboard">
+    <div class="loading-logo-stage" aria-hidden="true">
+      <img src="/static/logo.png" alt="" class="loading-logo">
+    </div>
+  </div>
+
   <!-- Header -->
   <header>
     <div class="header-brand">
@@ -251,15 +257,27 @@
             <small>Luminaire power for energy estimation</small>
             <input type="number" id="sNominalPower" min="1" max="500" step="1">
           </div>
-          <div class="setting-group">
-            <label for="sWeatherApiKey">Weather API Key</label>
-            <small>OpenWeatherMap API key (optional)</small>
-            <input type="text" id="sWeatherApiKey" placeholder="Enter API key...">
-          </div>
-          <div class="setting-group">
-            <label for="sWeatherLocation">Weather Location</label>
-            <small>City name or lat,lon for weather data</small>
-            <input type="text" id="sWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
+        </div>
+        <div class="setting-group full-width api-settings-group">
+          <label>API Keys</label>
+          <small>Optional app-wide keys saved with this installation data.</small>
+          <div class="api-key-grid">
+            <div>
+              <label for="sOpenAiApiKey">OpenAI API Key</label>
+              <input type="password" id="sOpenAiApiKey" autocomplete="off" placeholder="sk-...">
+            </div>
+            <div>
+              <label for="sOpenAiModel">OpenAI Model</label>
+              <input type="text" id="sOpenAiModel" placeholder="gpt-4o-mini">
+            </div>
+            <div>
+              <label for="sWeatherApiKey">Weather API Key</label>
+              <input type="password" id="sWeatherApiKey" autocomplete="off" placeholder="OpenWeatherMap key">
+            </div>
+            <div>
+              <label for="sWeatherLocation">Weather Location</label>
+              <input type="text" id="sWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
+            </div>
           </div>
         </div>
         <div class="setting-group full-width">
@@ -299,6 +317,28 @@
           <div id="createParticipantInfoFields"></div>
           <button type="submit" class="btn btn-primary">Create and Continue</button>
         </form>
+      </div>
+      <div class="api-onboarding-block">
+        <h3>API Keys</h3>
+        <p class="modal-subtitle">Optional app-wide keys saved with this installation data.</p>
+        <div class="api-key-grid">
+          <div class="pref-field">
+            <label for="onboardingOpenAiApiKey">OpenAI API Key</label>
+            <input type="password" id="onboardingOpenAiApiKey" autocomplete="off" placeholder="sk-...">
+          </div>
+          <div class="pref-field">
+            <label for="onboardingOpenAiModel">OpenAI Model</label>
+            <input type="text" id="onboardingOpenAiModel" placeholder="gpt-4o-mini">
+          </div>
+          <div class="pref-field">
+            <label for="onboardingWeatherApiKey">Weather API Key</label>
+            <input type="password" id="onboardingWeatherApiKey" autocomplete="off" placeholder="OpenWeatherMap key">
+          </div>
+          <div class="pref-field">
+            <label for="onboardingWeatherLocation">Weather Location</label>
+            <input type="text" id="onboardingWeatherLocation" placeholder="e.g. London or 51.5,-0.1">
+          </div>
+        </div>
       </div>
     </div>
   </div>

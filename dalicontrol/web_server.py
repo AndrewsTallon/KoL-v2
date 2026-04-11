@@ -122,6 +122,8 @@ class SettingsRequest(BaseModel):
     nominal_power_watts: Optional[float] = None
     weather_api_key: Optional[str] = None
     weather_location: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_model: Optional[str] = None
 
 
 class CreateProfileRequest(BaseModel):

@@ -8,8 +8,9 @@ Thread-safe for concurrent access from sensor loop, adaptive engine, and web ser
 
 import json
 import logging
+import os
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -54,12 +55,17 @@ class Settings:
     weather_api_key: str = ""
     weather_location: str = ""         # city name or "lat,lon"
 
+    # OpenAI API (optional)
+    openai_api_key: str = ""
+    openai_model: str = ""             # blank = use env/default model
+
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @classmethod
     def load(cls) -> "Settings":
         """Load settings from disk, falling back to defaults."""
         settings = cls()
+        should_save = False
         if SETTINGS_PATH.exists():
             try:
                 with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
@@ -72,6 +78,14 @@ class Settings:
                 logger.warning("Failed to load settings, using defaults: %s", exc)
         else:
             logger.info("No settings file found, using defaults.")
+
+        env_openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not settings.openai_api_key and env_openai_key:
+            settings.openai_api_key = env_openai_key
+            should_save = True
+            logger.info("Imported OPENAI_API_KEY into %s", SETTINGS_PATH)
+
+        if not SETTINGS_PATH.exists() or should_save:
             settings.save()
         return settings
 
@@ -107,7 +121,12 @@ class Settings:
                     val = float(val)
                 elif key in ("dim_level", "eval_interval", "brightness_threshold", "cct_threshold"):
                     val = int(val)
-                elif key in ("weather_api_key", "weather_location"):
+                elif key in (
+                    "weather_api_key",
+                    "weather_location",
+                    "openai_api_key",
+                    "openai_model",
+                ):
                     val = str(val)
 
                 # Range validation for numeric fields
@@ -127,4 +146,8 @@ class Settings:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (excluding internal fields)."""
-        return {k: v for k, v in asdict(self).items() if not k.startswith("_")}
+        return {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if not item.name.startswith("_")
+        }

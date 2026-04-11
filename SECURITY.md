@@ -155,7 +155,7 @@ cdn.jsdelivr.net ◄──HTTPS GET──── Browser (OPTIONAL)
 |------|----------|--------|---------------|
 | Telemetry logs | `telemetry/run_*.csv` | CSV | No (occupancy is boolean, no identity data) |
 | ML models | `models/*.joblib` | Joblib (pickle) | No (statistical model weights only) |
-| Settings | `settings.json` | JSON | Possibly (weather API key, location) |
+| Settings | `settings.json` | JSON | Possibly (OpenAI key, weather API key, location) |
 | Preferences | `preferences.json` | JSON | No (schedule times, brightness preferences) |
 | Lamp state | `state.json` | JSON | No (brightness level, color temp) |
 
@@ -189,7 +189,8 @@ Occupancy data is stored as boolean flags in telemetry CSVs and is used solely f
 | `KOL_API_KEY` | High | Environment variable only | Never written to disk by the application |
 | `weather_api_key` | Medium | `settings.json` | Stored in plaintext; restrict file permissions |
 | `weather_location` | Low | `settings.json` | City name or coordinates |
-| `OPENAI_API_KEY` | High | Environment variable only | Never written to disk by the application |
+| `openai_api_key` | High | `settings.json` | Stored in plaintext for portability; restrict file permissions |
+| `OPENAI_API_KEY` | High | Environment variable fallback | Imported into `settings.json` if no saved OpenAI key exists |
 
 ---
 
@@ -346,7 +347,7 @@ Use this checklist before deploying KoL-v2 in a production or shared environment
 - [ ] **Verify auth is active**: Check server log for `API key authentication enabled`
 - [ ] **Restrict binding**: Only bind to `0.0.0.0` if network access is required
 - [ ] **Use HTTPS**: Place behind a reverse proxy (nginx/Caddy) with TLS termination
-- [ ] **Restrict file permissions**: `chmod 600 dalicontrol/settings.json` (contains weather API key)
+- [ ] **Restrict file permissions**: `chmod 600 dalicontrol/settings.json` (contains OpenAI and weather keys when configured)
 - [ ] **Set up log rotation**: Configure logrotate for application logs
 - [ ] **Define data retention**: Implement automated telemetry file cleanup
 - [ ] **Review firewall rules**: Only expose the web port (default 8080) if needed
@@ -368,7 +369,7 @@ Use this checklist before deploying KoL-v2 in a production or shared environment
 | USB Serial (ESP32) | Malicious serial data injection | Input parsing with error handling; read-only |
 | USB HID (DALI) | Unauthorized lamp commands | Physical access required; no network exposure |
 | Telemetry CSVs | Data exfiltration | File system permissions; no PII in data |
-| Settings file | API key leakage (weather key) | File permissions; sensitive keys in env vars |
+| Settings file | API key leakage (OpenAI/weather keys) | File permissions; use env vars only if portability is not needed |
 | CDN dependency | Supply chain attack via Chart.js | CSP restricts to `cdn.jsdelivr.net`; self-host option |
 
 ### OWASP Top 10 Considerations
@@ -400,10 +401,10 @@ Use this checklist before deploying KoL-v2 in a production or shared environment
 
 1. Assess scope: telemetry contains no PII (occupancy is boolean only)
 2. Review access logs if reverse proxy is configured
-3. Rotate weather API key if `settings.json` was exposed
+3. Rotate OpenAI and weather keys if `settings.json` was exposed
 
-### If weather API key is compromised
+### If an optional service API key is compromised
 
-1. Regenerate the key at OpenWeatherMap
+1. Regenerate the key with the affected provider
 2. Update `settings.json` via the dashboard or direct file edit
 3. Restart the server

@@ -232,6 +232,7 @@ Python or development tools installed.
 - [ ] **Dashboard loads**: `http://localhost:8080` shows the dark-themed UI
 - [ ] **Profile gate**: Dashboard opens with the blocking profile picker before controls are used
 - [ ] **Initial participant info**: Create a profile and confirm `data/profiles/{profile_id}/participant_info.json` is written
+- [ ] **API keys onboarding**: Enter OpenAI/weather keys during profile creation and confirm they persist in `data/settings.json` after restart
 - [ ] **Profile model path**: Train AI models and confirm model files are written under `data/profiles/{profile_id}/models/`
 - [ ] **Final evaluation**: Use **Answer Final Evaluation** and confirm a timestamped JSON appears in `data/profiles/{profile_id}/final_evaluations/`
 - [ ] **Static assets**: CSS styling renders correctly, sliders and buttons visible

@@ -240,7 +240,7 @@ def main():
             controls = DaliControls(tx)
 
         lamp = LampController(controls, state)
-        operator = AIOperator(lamp, dry_run=args.dry_run)
+        operator = AIOperator(lamp, dry_run=args.dry_run, settings=settings)
 
         # A single lock for ALL lamp actions (sensor thread + AI thread + web)
         lamp_lock = threading.Lock()

@@ -338,10 +338,12 @@ Click the **Settings** header to expand the configuration panel:
 | Brightness Threshold | Minimum % change to trigger adjustment | 5% |
 | CCT Threshold | Minimum Kelvin change to trigger adjustment | 100K |
 | Nominal Power | Luminaire wattage for energy estimation | 40W |
+| OpenAI API Key | OpenAI key for optional LLM-powered commands |  |
+| OpenAI Model | Model for optional LLM-powered commands |  |
 | Weather API Key | OpenWeatherMap key for weather-aware lighting (optional) |  |
 | Weather Location | City name or lat,lon for weather data |  |
 
-Click **"Save Settings"** to persist changes. Settings survive server restarts.
+API keys can be entered during profile creation or later in Settings. Click **"Save Settings"** to persist changes. Settings survive server restarts.
 
 ### User Guide: Understanding the Decision Log
 
@@ -512,10 +514,10 @@ you> turn off
 you> turn on
 ```
 
-Commands are parsed using OpenAI function calling (if `OPENAI_API_KEY` is set) or a built-in rules-based parser as fallback.
+Commands are parsed using OpenAI function calling when an OpenAI key is saved in Settings. `OPENAI_API_KEY` and `OPENAI_MODEL` remain supported as fallbacks; otherwise the built-in rules-based parser is used.
 
 ```bash
-# Optional: enable LLM-powered command parsing
+# Optional fallback: enable LLM-powered command parsing through the environment
 export OPENAI_API_KEY=sk-...
 export OPENAI_MODEL=gpt-4o-mini   # optional, defaults to gpt-4o-mini
 ```
