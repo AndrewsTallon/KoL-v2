@@ -29,6 +29,8 @@ _RANGES: Dict[str, tuple] = {
     "dali_command_gap_s": (0.0, 10.0),
     "brightness_feedback_window_s": (0.0, 30.0),
     "brightness_feedback_min_lux_delta": (0.0, 100.0),
+    "max_brightness_step_pct": (1.0, 100.0),
+    "lamp_lux_at_100pct": (0.0, 2000.0),
     "nominal_power_watts": (1.0, 500.0),
     "weather_lat": (-90.0, 90.0),
     "weather_lon": (-180.0, 180.0),
@@ -49,6 +51,8 @@ class Settings:
     dali_command_gap_s: float = 0.75   # settle time between CCT and brightness sends
     brightness_feedback_window_s: float = 2.5  # seconds to observe lux after brightness
     brightness_feedback_min_lux_delta: float = 3.0  # minimum lux_smooth movement to confirm
+    max_brightness_step_pct: float = 15.0  # max % brightness change per adaptive eval cycle
+    lamp_lux_at_100pct: float = 400.0  # estimated lamp lux contribution at sensor at 100%
 
     # Energy estimation
     nominal_power_watts: float = 40.0
@@ -121,6 +125,8 @@ class Settings:
                     "dali_command_gap_s",
                     "brightness_feedback_window_s",
                     "brightness_feedback_min_lux_delta",
+                    "max_brightness_step_pct",
+                    "lamp_lux_at_100pct",
                     "nominal_power_watts",
                     "weather_lat",
                     "weather_lon",
