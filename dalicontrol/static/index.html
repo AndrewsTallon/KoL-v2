@@ -4,13 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KoL Lighting Control</title>
+  <link rel="icon" type="image/png" href="/static/logo.png">
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <!-- Header -->
   <header>
-    <h1>KoL Lighting Control</h1>
+    <div class="header-brand">
+      <img src="/static/logo.png" alt="KoL" class="header-logo">
+      <h1>Lighting Control</h1>
+    </div>
     <div class="header-actions">
       <span class="profile-chip">Profile: <strong id="activeProfileName">None</strong></span>
       <button id="switchProfileBtn" class="btn btn-sm">Switch Profile</button>
@@ -273,6 +277,9 @@
   <!-- Profile Gate Overlay -->
   <div class="modal-overlay blocking-overlay" id="profileGateOverlay" style="display:flex;">
     <div class="modal-content profile-modal">
+      <div class="gate-logo-wrapper">
+        <img src="/static/logo.png" alt="KoL Adaptive Lighting" class="gate-logo">
+      </div>
       <div class="modal-header">
         <h2>Select Participant Profile</h2>
       </div>

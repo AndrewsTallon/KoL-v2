@@ -28,6 +28,9 @@ OutputBaseFilename=KoL-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Branding - generate kol.ico from logo.png before building installer
+; SetupIconFile=assets\kol.ico
+; WizardSmallImageFile=assets\kol-wizard-small.bmp
 PrivilegesRequired=admin
 ; Allow the user to change install dir
 AllowNoIcons=yes
