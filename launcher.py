@@ -34,7 +34,7 @@ def main():
     parser.add_argument("--sensor-baud", type=int, default=115200)
     parser.add_argument("--dry-run", action="store_true",
                         help="Simulate hardware (no USB devices needed)")
-    parser.add_argument("--mode", choices=["manual", "ai"], default="manual")
+    parser.add_argument("--mode", choices=["manual", "baseline", "ai"], default="manual")
     parser.add_argument("--web-port", type=int, default=8080)
     parser.add_argument("--no-browser", action="store_true",
                         help="Don't auto-open the browser")

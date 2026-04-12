@@ -117,6 +117,8 @@ def summarize_run(csv_path: Path, nominal_power_w: float = 40.0) -> dict:
     lux_values: list[float] = []
     action_counts = Counter()
     ai_reason_counts = Counter()
+    sample_type_counts = Counter()
+    decision_outcome_counts = Counter()
 
     for index, row in enumerate(rows):
         next_row = rows[index + 1] if index + 1 < len(rows) else None
@@ -138,6 +140,12 @@ def summarize_run(csv_path: Path, nominal_power_w: float = 40.0) -> dict:
             reason = str(row.get("reason") or "").strip()
             if reason:
                 ai_reason_counts[reason] += 1
+        sample_type = str(row.get("sample_type") or "").strip()
+        if sample_type:
+            sample_type_counts[sample_type] += 1
+        decision_outcome = str(row.get("decision_outcome") or "").strip()
+        if decision_outcome:
+            decision_outcome_counts[decision_outcome] += 1
 
         if not is_on:
             continue
@@ -154,6 +162,7 @@ def summarize_run(csv_path: Path, nominal_power_w: float = 40.0) -> dict:
     return {
         "run": csv_path.name,
         "mode": first.get("mode", ""),
+        "schema_version": first.get("telemetry_schema_version", ""),
         "rows": len(rows),
         "start": first.get("ts_iso", ""),
         "end": last.get("ts_iso", ""),
@@ -166,8 +175,12 @@ def summarize_run(csv_path: Path, nominal_power_w: float = 40.0) -> dict:
         "lux_min": round(min(lux_values), 1) if lux_values else 0.0,
         "lux_max": round(max(lux_values), 1) if lux_values else 0.0,
         "action_count": sum(action_counts.values()),
+        "ai_action_count": sample_type_counts.get("ai_action", 0),
+        "ai_evaluation_count": sample_type_counts.get("ai_evaluation", 0),
         "top_actions": action_counts.most_common(5),
         "ai_reason_counts": ai_reason_counts.most_common(8),
+        "sample_type_counts": sample_type_counts.most_common(),
+        "decision_outcome_counts": decision_outcome_counts.most_common(),
         "brightness_distribution": brightness_dist.most_common(),
         "cct_distribution": cct_dist.most_common(),
     }
@@ -177,12 +190,12 @@ def render_markdown(summaries: list[dict], questionnaire_by_run: dict[str, list[
     lines = [
         "# Thesis Telemetry Metrics",
         "",
-        "| Run | Mode | Rows | Lit runtime (min) | Absence lit (%) | Energy (Wh) | Avg brightness on (%) | Lux avg | Actions |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Run | Mode | Schema | Rows | Lit runtime (min) | Absence lit (%) | Energy (Wh) | Avg brightness on (%) | Lux avg | Actions |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for item in summaries:
         lines.append(
-            f"| {item['run']} | {item['mode']} | {item['rows']} | "
+            f"| {item['run']} | {item['mode']} | {item['schema_version']} | {item['rows']} | "
             f"{item['lit_runtime_s'] / 60:.1f} | {item['absence_lit_pct']:.1f} | "
             f"{item['estimated_energy_wh']:.3f} | {item['avg_brightness_on_pct']:.1f} | "
             f"{item['lux_avg']:.1f} | {item['action_count']} |"
@@ -193,6 +206,8 @@ def render_markdown(summaries: list[dict], questionnaire_by_run: dict[str, list[
         lines.append(f"- Time range: {item['start']} to {item['end']}")
         lines.append(f"- Lux range: {item['lux_min']} to {item['lux_max']} lux")
         lines.append(f"- Lighting during absence: {item['absence_lit_s'] / 60:.1f} minutes")
+        lines.append(f"- Sample types: {_format_counts(item['sample_type_counts'])}")
+        lines.append(f"- Decision outcomes: {_format_counts(item['decision_outcome_counts'])}")
         lines.append(f"- Top AI/action reasons: {_format_counts(item['ai_reason_counts'])}")
         lines.append(f"- Brightness distribution: {_format_counts(item['brightness_distribution'])}")
         lines.append(f"- CCT distribution: {_format_counts(item['cct_distribution'])}")
@@ -216,6 +231,7 @@ def write_csv_summary(path: Path, summaries: list[dict]) -> None:
     fieldnames = [
         "run",
         "mode",
+        "schema_version",
         "rows",
         "start",
         "end",
@@ -228,6 +244,8 @@ def write_csv_summary(path: Path, summaries: list[dict]) -> None:
         "lux_min",
         "lux_max",
         "action_count",
+        "ai_action_count",
+        "ai_evaluation_count",
     ]
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

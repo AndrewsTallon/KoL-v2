@@ -21,6 +21,9 @@ class ThesisTelemetryTests(unittest.TestCase):
             stationary=occupied,
             lux=100.0,
             lux_smooth=100.0,
+            lux_ok=True,
+            sensor_seq=42,
+            sensor_uptime_s=123,
             moving_age_ms=0,
             moving_events=0,
         )
@@ -48,6 +51,12 @@ class ThesisTelemetryTests(unittest.TestCase):
         self.assertAlmostEqual(row["lamp_brightness_frac"], 0.5, places=2)
         self.assertAlmostEqual(row["lamp_estimated_power_w"], 20.0, places=1)
         self.assertEqual(row["sample_type"], "heartbeat")
+        self.assertEqual(row["telemetry_schema_version"], "2026-04-12.1")
+        self.assertEqual(row["study_phase"], "ai_driven")
+        self.assertEqual(row["control_source"], "logger")
+        self.assertTrue(row["lux_ok"])
+        self.assertEqual(row["sensor_seq"], 42)
+        self.assertEqual(row["sensor_uptime_s"], 123)
 
     def test_build_row_treats_off_lamp_as_zero_brightness(self):
         row = build_row(
@@ -71,6 +80,9 @@ class ThesisTelemetryTests(unittest.TestCase):
             lamp=self.make_lamp(),
             runtime_tracker={"total_s": 1.0, "energy_wh": 0.0},
             sample_type="ai_action",
+            raw_sensor_lux=240.0,
+            estimated_ambient_lux=120.0,
+            circadian_cct_target=5000,
             rec_brightness_pct=75.5,
             rec_cct_kelvin=5000,
             brightness_delta_pct=12.5,
@@ -82,14 +94,32 @@ class ThesisTelemetryTests(unittest.TestCase):
             weather_brightness_adjust_pct=3.0,
             model_type="brightness: test, cct: test",
             cct_reasoning="test cct rationale",
+            behavior_note="test behavior",
         )
 
         self.assertEqual(row["sample_type"], "ai_action")
+        self.assertEqual(row["control_source"], "ai")
+        self.assertEqual(row["decision_outcome"], "applied")
+        self.assertEqual(row["raw_sensor_lux"], 240.0)
+        self.assertEqual(row["estimated_ambient_lux"], 120.0)
+        self.assertEqual(row["circadian_cct_target"], 5000)
         self.assertEqual(row["rec_brightness_pct"], 75.5)
         self.assertEqual(row["rec_cct_kelvin"], 5000)
         self.assertEqual(row["brightness_delta_pct"], 12.5)
         self.assertEqual(row["cct_delta_kelvin"], 300)
         self.assertEqual(row["cct_reasoning"], "test cct rationale")
+        self.assertEqual(row["behavior_note"], "test behavior")
+
+    def test_build_row_supports_baseline_phase_alias(self):
+        row = build_row(
+            mode="baseline",
+            snap=self.make_snap(),
+            lamp=self.make_lamp(),
+            runtime_tracker={"total_s": 1.0, "energy_wh": 0.0},
+        )
+
+        self.assertEqual(row["mode"], "baseline")
+        self.assertEqual(row["study_phase"], "baseline")
 
     def test_telemetry_logger_populates_sample_dt(self):
         with tempfile.TemporaryDirectory() as tmp:

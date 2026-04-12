@@ -23,6 +23,9 @@ from .usb_occupancy import UsbOccupancyReader, detect_sensor_port
 # ---------------- Telemetry ----------------
 
 
+TELEMETRY_SCHEMA_VERSION = "2026-04-12.1"
+
+
 class TelemetryLogger:
     """
     Appends rows to a CSV file for later analysis (manual vs AI, comfort vs savings).
@@ -33,6 +36,8 @@ class TelemetryLogger:
         "ts_epoch",
         "ts_iso",
         "mode",
+        "telemetry_schema_version",
+        "study_phase",
         "profile_id",
         "profile_name",
         "raw_present",
@@ -41,6 +46,7 @@ class TelemetryLogger:
         "stationary",
         "lux",
         "lux_smooth",
+        "lux_ok",
         "moving_age_ms",
         "moving_events",
         "sensor_age_s",
@@ -49,6 +55,7 @@ class TelemetryLogger:
         "still_dist",
         "still_energy",
         "sensor_seq",
+        "sensor_uptime_s",
         "confirm_count",
         "filter_stage",
         "lamp_is_off",
@@ -64,6 +71,8 @@ class TelemetryLogger:
         "energy_est_wh_cumulative",
         "lighting_during_absence",
         "sample_type",
+        "control_source",
+        "decision_outcome",
         "action",
         "reason",
         "rationale",
@@ -71,7 +80,10 @@ class TelemetryLogger:
         "circadian_phase",
         "weather_context",
         "brightness_reasoning",
+        "raw_sensor_lux",
+        "estimated_ambient_lux",
         "target_lux",
+        "circadian_cct_target",
         "brightness_base_pct",
         "rec_brightness_pct",
         "rec_cct_kelvin",
@@ -84,6 +96,7 @@ class TelemetryLogger:
         "weather_brightness_adjust_pct",
         "model_type",
         "cct_reasoning",
+        "behavior_note",
     ]
 
     def __init__(self, mode: str):
@@ -145,7 +158,10 @@ def build_row(
     circadian_phase: str = "",
     weather_context: str = "",
     brightness_reasoning: str = "",
+    raw_sensor_lux: str = "",
+    estimated_ambient_lux: str = "",
     target_lux: str = "",
+    circadian_cct_target: str = "",
     brightness_base_pct: str = "",
     rec_brightness_pct: str = "",
     rec_cct_kelvin: str = "",
@@ -158,7 +174,10 @@ def build_row(
     weather_brightness_adjust_pct: str = "",
     model_type: str = "",
     cct_reasoning: str = "",
+    behavior_note: str = "",
     sample_type: str = "heartbeat",
+    control_source: str = "",
+    decision_outcome: str = "",
     profile_id: str = "",
     profile_name: str = "",
     nominal_power_watts: float = 40.0,
@@ -175,11 +194,23 @@ def build_row(
     occupied = getattr(snap, "filt_occupied", None)
     lighting_during_absence = (not lamp_is_off) and occupied not in (True, "True", "true", 1, "1")
     estimated_power_w = 0.0 if lamp_is_off else float(nominal_power_watts) * brightness_frac
+    study_phase = "ai_driven" if mode == "ai" else "baseline"
+    if not control_source:
+        control_source = {
+            "ai_action": "ai",
+            "ai_evaluation": "ai",
+            "user_command": "human",
+            "heartbeat": "logger",
+        }.get(sample_type, "")
+    if not decision_outcome and sample_type == "ai_action" and action:
+        decision_outcome = "applied"
 
     return {
         "ts_epoch": round(now_epoch, 3),
         "ts_iso": now_iso,
         "mode": mode,
+        "telemetry_schema_version": TELEMETRY_SCHEMA_VERSION,
+        "study_phase": study_phase,
         "profile_id": profile_id,
         "profile_name": profile_name,
         "raw_present": getattr(snap, "raw_present", None),
@@ -188,6 +219,7 @@ def build_row(
         "stationary": getattr(snap, "stationary", None),
         "lux": getattr(snap, "lux", None),
         "lux_smooth": getattr(snap, "lux_smooth", None),
+        "lux_ok": getattr(snap, "lux_ok", None),
         "moving_age_ms": getattr(snap, "moving_age_ms", None),
         "moving_events": getattr(snap, "moving_events", None),
         "sensor_age_s": round(sensor_age_s, 3),
@@ -196,6 +228,7 @@ def build_row(
         "still_dist": getattr(snap, "still_dist", None),
         "still_energy": getattr(snap, "still_energy", None),
         "sensor_seq": getattr(snap, "sensor_seq", None),
+        "sensor_uptime_s": getattr(snap, "sensor_uptime_s", None),
         "confirm_count": getattr(snap, "confirm_count", None),
         "filter_stage": getattr(snap, "filter_stage", None),
         "lamp_is_off": lamp_is_off,
@@ -211,6 +244,8 @@ def build_row(
         "energy_est_wh_cumulative": round(runtime_tracker.get("energy_wh", 0), 4),
         "lighting_during_absence": lighting_during_absence,
         "sample_type": sample_type,
+        "control_source": control_source,
+        "decision_outcome": decision_outcome,
         "action": action,
         "reason": reason,
         "rationale": rationale,
@@ -218,7 +253,10 @@ def build_row(
         "circadian_phase": circadian_phase,
         "weather_context": weather_context,
         "brightness_reasoning": brightness_reasoning,
+        "raw_sensor_lux": raw_sensor_lux,
+        "estimated_ambient_lux": estimated_ambient_lux,
         "target_lux": target_lux,
+        "circadian_cct_target": circadian_cct_target,
         "brightness_base_pct": brightness_base_pct,
         "rec_brightness_pct": rec_brightness_pct,
         "rec_cct_kelvin": rec_cct_kelvin,
@@ -231,6 +269,7 @@ def build_row(
         "weather_brightness_adjust_pct": weather_brightness_adjust_pct,
         "model_type": model_type,
         "cct_reasoning": cct_reasoning,
+        "behavior_note": behavior_note,
     }
 
 
@@ -261,6 +300,7 @@ def record_decision(
         entry["weather"] = context.get("weather", "")
         entry["rec_brightness"] = context.get("rec_brightness")
         entry["rec_cct"] = context.get("rec_cct")
+        entry["decision_outcome"] = context.get("decision_outcome", "")
         entry["model_type"] = context.get("model_type", "")
         entry["brightness_reasoning"] = context.get("brightness_reasoning", "")
         entry["target_lux"] = context.get("target_lux")
@@ -285,9 +325,9 @@ def parse_args():
     p.add_argument("--auto", action="store_true", help="Auto on/off based on occupancy")
     p.add_argument(
         "--mode",
-        choices=["manual", "ai"],
+        choices=["manual", "baseline", "ai"],
         default="manual",
-        help="'manual' = pure human control (no automation), 'ai' = ML-driven adaptive control.",
+        help="'manual'/'baseline' = pure human control, 'ai' = ML-driven adaptive control.",
     )
     p.add_argument("--web", action="store_true", help="Start the web dashboard server")
     p.add_argument("--web-host", default="127.0.0.1",
@@ -430,7 +470,10 @@ def main():
                     circadian_phase=context.get("circadian_phase", "") if context else "",
                     weather_context=context.get("weather", "") if context else "",
                     brightness_reasoning=context.get("brightness_reasoning", "") if context else "",
+                    raw_sensor_lux=context.get("raw_sensor_lux", "") if context else "",
+                    estimated_ambient_lux=context.get("estimated_ambient_lux", "") if context else "",
                     target_lux=context.get("target_lux", "") if context else "",
+                    circadian_cct_target=context.get("circadian_cct_target", "") if context else "",
                     brightness_base_pct=context.get("brightness_base_pct", "") if context else "",
                     rec_brightness_pct=context.get("rec_brightness", "") if context else "",
                     rec_cct_kelvin=context.get("rec_cct", "") if context else "",
@@ -443,7 +486,9 @@ def main():
                     weather_brightness_adjust_pct=context.get("weather_brightness_adjust_pct", "") if context else "",
                     model_type=context.get("model_type", "") if context else "",
                     cct_reasoning=context.get("cct_reasoning", "") if context else "",
-                    sample_type="ai_action",
+                    behavior_note=context.get("behavior_note", "") if context else "",
+                    sample_type=context.get("sample_type", "ai_action") if context else "ai_action",
+                    decision_outcome=context.get("decision_outcome", "") if context else "",
                     nominal_power_watts=settings.nominal_power_watts,
                     **active_profile_fields(),
                 ))

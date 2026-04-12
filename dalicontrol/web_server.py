@@ -110,7 +110,7 @@ class CCTRequest(BaseModel):
     kelvin: int
 
 class ModeRequest(BaseModel):
-    mode: Optional[str] = None   # "manual" or "ai"
+    mode: Optional[str] = None   # "manual", "baseline", or "ai"
     auto: Optional[bool] = None
 
 class PowerRequest(BaseModel):
@@ -200,7 +200,7 @@ def create_app(app_state: dict) -> FastAPI:
         telem: TelemetryLogger
         operator: AIOperator
         adaptive_engine: AdaptiveEngine (or None)
-        mode: str  ("manual" or "ai")
+        mode: str  ("manual"/"baseline" or "ai")
         auto: bool
         nominal_power_watts: float
         runtime_tracker: dict  (shared mutable for runtime tracking)
@@ -322,7 +322,7 @@ def create_app(app_state: dict) -> FastAPI:
 
     @app.post("/api/mode")
     async def set_mode(req: ModeRequest):
-        if req.mode is not None and req.mode in ("manual", "ai"):
+        if req.mode is not None and req.mode in ("manual", "baseline", "ai"):
             old_mode = app_state["mode"]
             app_state["mode"] = req.mode
             logger.info("Mode changed: %s → %s", old_mode, req.mode)
@@ -364,7 +364,10 @@ def create_app(app_state: dict) -> FastAPI:
                                 circadian_phase=context.get("circadian_phase", "") if context else "",
                                 weather_context=context.get("weather", "") if context else "",
                                 brightness_reasoning=context.get("brightness_reasoning", "") if context else "",
+                                raw_sensor_lux=context.get("raw_sensor_lux", "") if context else "",
+                                estimated_ambient_lux=context.get("estimated_ambient_lux", "") if context else "",
                                 target_lux=context.get("target_lux", "") if context else "",
+                                circadian_cct_target=context.get("circadian_cct_target", "") if context else "",
                                 brightness_base_pct=context.get("brightness_base_pct", "") if context else "",
                                 rec_brightness_pct=context.get("rec_brightness", "") if context else "",
                                 rec_cct_kelvin=context.get("rec_cct", "") if context else "",
@@ -377,7 +380,9 @@ def create_app(app_state: dict) -> FastAPI:
                                 weather_brightness_adjust_pct=context.get("weather_brightness_adjust_pct", "") if context else "",
                                 model_type=context.get("model_type", "") if context else "",
                                 cct_reasoning=context.get("cct_reasoning", "") if context else "",
-                                sample_type="ai_action",
+                                behavior_note=context.get("behavior_note", "") if context else "",
+                                sample_type=context.get("sample_type", "ai_action") if context else "ai_action",
+                                decision_outcome=context.get("decision_outcome", "") if context else "",
                                 nominal_power_watts=app_state.get("nominal_power_watts", 40.0),
                                 **_profile_fields(app_state),
                             ))

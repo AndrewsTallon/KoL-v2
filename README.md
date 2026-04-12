@@ -258,7 +258,7 @@ python -m dalicontrol.main [OPTIONS]
 | `--sensor-port PORT` | *(required)* | Serial port for ESP32 sensor (e.g., `/dev/ttyUSB0`) |
 | `--sensor-baud RATE` | `115200` | Baud rate for sensor serial communication |
 | `--auto` | off | Enable automatic occupancy-based lamp control |
-| `--mode {baseline,ai}` | `baseline` | Operating mode: `baseline` for data collection, `ai` for adaptive control |
+| `--mode {manual,baseline,ai}` | `manual` | Operating mode: `manual`/`baseline` for human-controlled data collection, `ai` for adaptive control |
 | `--web` | off | Start the web dashboard server |
 | `--web-port PORT` | `8080` | Port for the web dashboard |
 | `--no-cli` | off | Disable the CLI input loop (useful with `--web`) |
@@ -377,13 +377,16 @@ Telemetry is logged to `dalicontrol/telemetry/` as CSV files named `run_YYYYMMDD
 |--------|------|-------------|
 | `ts_epoch` | float | Unix timestamp |
 | `ts_iso` | string | ISO 8601 timestamp |
-| `mode` | string | "baseline" or "ai" |
+| `mode` | string | Run mode: `manual`, `baseline`, or `ai` |
+| `telemetry_schema_version` | string | CSV schema version; use this to confirm the installed executable is writing the current telemetry format |
+| `study_phase` | string | Analysis phase: `baseline` for manual/baseline runs, `ai_driven` for AI runs |
 | `raw_present` | bool | Raw radar detection (before filtering) |
 | `filt_occupied` | bool | Filtered occupancy (after 3-layer filter) |
 | `moving` | bool | Motion detected by radar |
 | `stationary` | bool | Stationary target detected |
 | `lux` | float | Raw ambient light (lux) |
 | `lux_smooth` | float | EMA-smoothed lux from ESP32 |
+| `lux_ok` | bool | BH1750 health flag from the ESP32 |
 | `moving_age_ms` | int | Milliseconds since last motion |
 | `moving_events` | int | Cumulative motion event count |
 | `sensor_age_s` | float | Time since last sensor reading |
@@ -392,6 +395,7 @@ Telemetry is logged to `dalicontrol/telemetry/` as CSV files named `run_YYYYMMDD
 | `still_dist` | int | Stationary target distance (cm) |
 | `still_energy` | int | Stationary target signal strength (0–100) |
 | `sensor_seq` | int | ESP32 heartbeat sequence number |
+| `sensor_uptime_s` | int | ESP32 uptime in seconds |
 | `confirm_count` | int | Confirmation window count (0–5) |
 | `filter_stage` | string | Active filter: "instant", "confirmed", "debounced" |
 | `lamp_is_off` | bool | Lamp power state |
@@ -406,11 +410,16 @@ Telemetry is logged to `dalicontrol/telemetry/` as CSV files named `run_YYYYMMDD
 | `lamp_estimated_power_w` | float | Estimated instantaneous power from nominal power and effective brightness |
 | `energy_est_wh_cumulative` | float | Cumulative estimated watt-hours for the current run |
 | `lighting_during_absence` | bool | Lamp on while filtered occupancy is false |
-| `sample_type` | string | `heartbeat`, `ai_action`, or `user_command` |
+| `sample_type` | string | `heartbeat`, `ai_action`, `ai_evaluation`, or `user_command` |
+| `control_source` | string | Source of the row: logger, human, or AI |
+| `decision_outcome` | string | AI/action outcome such as `applied` or `no_change` |
 | `action` | string | Command executed (e.g., "set_brightness_pct(75)") |
 | `reason` | string | Machine-readable reason code |
 | `rationale` | string | Human-readable decision explanation |
 | `user_text` | string | Natural language command (if user-initiated) |
+| `raw_sensor_lux` | float | Raw sensor lux used by an AI evaluation/action row |
+| `estimated_ambient_lux` | float | AI-estimated ambient lux after subtracting lamp contribution |
+| `circadian_cct_target` | int | Circadian CCT target before preference adjustment |
 | `rec_brightness_pct` | float | AI recommended brightness percentage for action rows |
 | `rec_cct_kelvin` | int | AI recommended CCT for action rows |
 | `brightness_delta_pct` | float | Difference between current and recommended brightness |
@@ -422,11 +431,13 @@ Telemetry is logged to `dalicontrol/telemetry/` as CSV files named `run_YYYYMMDD
 | `weather_brightness_adjust_pct` | float | Weather-derived brightness adjustment |
 | `model_type` | string | Sources used for brightness and CCT recommendations |
 | `cct_reasoning` | string | Human-readable CCT reasoning |
+| `behavior_note` | string | Optional note about learned behavior history used in an AI decision |
 
 ### Logging Frequency
 
 - **Heartbeat**: Every 5 seconds (sensor + lamp state snapshot)
 - **Event-driven**: Immediately on any action (occupancy change, AI adjustment, user command)
+- **AI evaluation**: Every AI control evaluation is logged, including `no_change` rows where thresholds prevent a visible adjustment
 
 ---
 

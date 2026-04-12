@@ -42,6 +42,26 @@ This will:
 
 **Output**: `dist/KoL/KoL.exe`
 
+## Full Installer Build
+
+Use this when preparing a file to give to the user machine:
+
+```bat
+build_installer.bat
+```
+
+This builds the current source into `dist\KoL\KoL.exe`, verifies the built app
+is current, then compiles the combined app + CP210x driver installer.
+
+If Python is installed but not on PATH, run it like this:
+
+```bat
+set PYTHON=C:\Path\To\python.exe
+build_installer.bat
+```
+
+**Output**: `Output\KoL-Setup-{version}.exe`
+
 ### Test the Build
 
 ```bat
@@ -106,7 +126,8 @@ Options:
   --sensor-port PORT   Serial port for ESP32 (e.g. COM3). Required unless --dry-run.
   --sensor-baud RATE   Baud rate (default: 115200)
   --dry-run            Run without USB hardware (simulation mode)
-  --mode {manual,ai}   Operating mode (default: manual)
+  --mode {manual,baseline,ai}
+                       Operating mode (default: manual)
   --web-port PORT      Dashboard port (default: 8080)
   --no-browser         Don't auto-open the browser
 ```
@@ -132,10 +153,8 @@ KoL.exe --sensor-port COM3 --web-port 9090
 ## Building the Installer (Optional)
 
 1. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php)
-2. First run `build_exe.bat` to create `dist/KoL/`
-3. Open `installer.iss` in Inno Setup Compiler
-4. Update `#define MyAppVersion` if needed
-5. Click **Build > Compile**
+2. Run `build_installer.bat`
+3. Update `#define MyAppVersion` in `installer.iss` first if you need a new public version number
 
 **Output**: `Output/KoL-Setup-{version}.exe`
 
@@ -157,11 +176,11 @@ After modifying the Python source code:
 
 ```bat
 REM From the repository root:
-build_exe.bat
+build_installer.bat
 ```
 
-That's it. The spec file and build script handle everything. No need to
-reconfigure anything unless you add new Python packages or data files.
+That's it for a release build. The script rebuilds the exe first, then creates
+the installer, so you do not accidentally ship an old app with a new installer.
 
 ### When to Update `kol.spec`
 

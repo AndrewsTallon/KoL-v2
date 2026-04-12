@@ -2,15 +2,16 @@
 ; KoL Adaptive Lighting - Inno Setup Installer Script
 ;
 ; Prerequisites:
-;   1. Run build_exe.bat first to create dist\KoL\
+;   1. Prefer build_installer.bat to build dist\KoL\ and this installer together
 ;   2. Install Inno Setup 6 from https://jrsoftware.org/isinfo.php
-;   3. Open this file in Inno Setup Compiler and click Build
+;   3. Or open this file in Inno Setup Compiler and click Build
 ;
 ; Output: Output\KoL-Setup-{version}.exe
+; This single installer installs/updates the app and stages the CP210x driver.
 ; ============================================================
 
 #define MyAppName "KoL Adaptive Lighting"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.2"
 #define MyAppPublisher "KoL Project"
 #define MyAppExeName "KoL.exe"
 #define MyAppURL "https://github.com/AndrewsTallon/KoL-v2"
@@ -32,6 +33,8 @@ WizardStyle=modern
 ; SetupIconFile=assets\kol.ico
 ; WizardSmallImageFile=assets\kol-wizard-small.bmp
 PrivilegesRequired=admin
+CloseApplications=yes
+RestartApplications=no
 ; Allow the user to change install dir
 AllowNoIcons=yes
 
@@ -61,8 +64,9 @@ Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: 
 
 [Run]
 ; Pre-stage and install the CP210x driver so Windows can assign a COM port to the sensor.
-Filename: "{sysnative}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\cp210x\silabser.inf"" /install"; StatusMsg: "Installing CP210x USB serial driver..."; Flags: runhidden waituntilterminated; Check: IsWin64
-Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\cp210x\silabser.inf"" /install"; StatusMsg: "Installing CP210x USB serial driver..."; Flags: runhidden waituntilterminated; Check: not IsWin64
+; pnputil is idempotent: if the driver is already present, Windows keeps/uses the installed package.
+Filename: "{sysnative}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\cp210x\silabser.inf"" /install"; StatusMsg: "Checking/installing CP210x USB serial driver..."; Flags: runhidden waituntilterminated; Check: IsWin64
+Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\cp210x\silabser.inf"" /install"; StatusMsg: "Checking/installing CP210x USB serial driver..."; Flags: runhidden waituntilterminated; Check: not IsWin64
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch KoL Adaptive Lighting"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]

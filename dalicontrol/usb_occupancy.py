@@ -60,6 +60,7 @@ class OccupancyStatus:
 
     # ESP32 heartbeat sequence counter
     sensor_seq: Optional[int] = None
+    sensor_uptime_s: Optional[int] = None
 
     # Occupancy filter diagnostics
     confirm_count: Optional[int] = None
@@ -347,11 +348,14 @@ class UsbOccupancyReader:
 
                             # Parse extended sensor fields (additive, never break old firmware)
                             for key in ("lux_smooth", "lux_ok", "move_dist", "move_energy",
-                                        "still_dist", "still_energy", "seq",
+                                        "still_dist", "still_energy", "seq", "uptime_s",
                                         "confirm_count", "filter_stage"):
                                 val = data.get(key)
                                 if val is not None:
-                                    attr = "sensor_seq" if key == "seq" else key
+                                    attr = {
+                                        "seq": "sensor_seq",
+                                        "uptime_s": "sensor_uptime_s",
+                                    }.get(key, key)
                                     setattr(self.status, attr, val)
 
                             self.status.last_line = text

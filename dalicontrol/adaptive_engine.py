@@ -1141,4 +1141,10 @@ class AdaptiveEngine:
             )
 
         if actions and self.on_action:
+            context["sample_type"] = "ai_action"
+            context["decision_outcome"] = "applied"
             self.on_action("; ".join(actions), reason, rationale, context)
+        elif self.on_action:
+            context["sample_type"] = "ai_evaluation"
+            context["decision_outcome"] = "no_change"
+            self.on_action("no_change", reason, rationale, context)

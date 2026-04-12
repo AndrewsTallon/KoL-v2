@@ -146,6 +146,23 @@ class DaliSequencingTests(unittest.TestCase):
         action = engine.on_action_calls[0][0]
         self.assertIn("brightness_feedback(unverified)", action)
 
+    def test_no_change_evaluation_is_logged_for_evidence(self):
+        engine, controls = self.make_engine(
+            prediction=(50.0, 2700),
+            initial_brightness=50.0,
+            initial_cct=2700,
+        )
+
+        engine._apply_adaptive(FakeSnap())
+
+        self.assertEqual(controls.calls, [])
+        action, reason, rationale, context = engine.on_action_calls[0]
+        self.assertEqual(action, "no_change")
+        self.assertEqual(reason, "adaptive_eval")
+        self.assertIn("No adjustment needed", rationale)
+        self.assertEqual(context["sample_type"], "ai_evaluation")
+        self.assertEqual(context["decision_outcome"], "no_change")
+
     def test_no_lux_movement_retries_brightness_once(self):
         engine, controls = self.make_engine(
             prediction=(80.0, 2700),
