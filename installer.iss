@@ -44,6 +44,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Main application (entire dist\KoL directory)
 Source: "dist\KoL\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Silicon Labs CP210x USB-to-UART driver used by ESP32 sensor boards
+Source: "drivers\cp210x\*"; DestDir: "{app}\drivers\cp210x"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 ; Writable data directory (preserved across upgrades)
@@ -58,6 +60,9 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; Pre-stage and install the CP210x driver so Windows can assign a COM port to the sensor.
+Filename: "{sysnative}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\cp210x\silabser.inf"" /install"; StatusMsg: "Installing CP210x USB serial driver..."; Flags: runhidden waituntilterminated; Check: IsWin64
+Filename: "{sys}\pnputil.exe"; Parameters: "/add-driver ""{app}\drivers\cp210x\silabser.inf"" /install"; StatusMsg: "Installing CP210x USB serial driver..."; Flags: runhidden waituntilterminated; Check: not IsWin64
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch KoL Adaptive Lighting"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]

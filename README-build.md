@@ -141,6 +141,8 @@ KoL.exe --sensor-port COM3 --web-port 9090
 
 The installer:
 - Copies the application to Program Files
+- Bundles and installs the Silicon Labs CP210x USB-to-UART driver used by many
+  ESP32 sensor boards, so Windows can assign the sensor a COM port
 - Creates Start Menu shortcuts
 - Optional desktop shortcut
 - Creates writable `data/`, `data/telemetry`, `data/models`, and `data/profiles`
@@ -209,6 +211,10 @@ correctly by looking at the console log output.
 
 - Check Device Manager for COM port assignment
 - Ensure the ESP32 driver is installed (CP2102 or CH340)
+- The installer bundles the Silicon Labs CP210x driver package from
+  `drivers/cp210x/` and runs `pnputil /add-driver ... /install` during setup.
+  This fixes the common Device Manager state where a CP2102 USB-to-UART bridge
+  appears without a driver and no COM port is created.
 - For the DALI controller: the `hidapi` DLL is bundled automatically by
   PyInstaller
 
@@ -246,4 +252,5 @@ Python or development tools installed.
 - [ ] **Data persistence**: Stop and restart — active profile, final evaluation files, settings, and state.json survive
 - [ ] **Rebuild survives**: Re-run installer — user data in `data/`, especially `data/profiles`, is not overwritten
 - [ ] **Hardware (if available)**: Connect ESP32 + DALI controller, run with `--sensor-port COM3`
+- [ ] **CP210x driver**: On a clean Windows machine, confirm Device Manager lists the CP210x/ESP32 sensor under Ports (COM & LPT) after installation
 - [ ] **Uninstall**: Uninstall via Windows — prompted about keeping data
