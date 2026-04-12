@@ -30,6 +30,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .cct_utils import dtr_to_kelvin, kelvin_to_dtr, level_to_pct
 from .energy_estimator import estimate_energy
 from .paths import STATIC_DIR, TELEM_DIR
+from .usb_occupancy import list_available_ports
 from .profiles import (
     create_profile,
     get_active_profile,
@@ -138,6 +139,11 @@ class SettingsRequest(BaseModel):
 class WeatherLocationRequest(BaseModel):
     query: str
     api_key: Optional[str] = None
+
+
+class SensorPortRequest(BaseModel):
+    # Empty string or null both mean "clear & resume auto-detection".
+    port: Optional[str] = None
 
 
 class CreateProfileRequest(BaseModel):
@@ -398,6 +404,41 @@ def create_app(app_state: dict) -> FastAPI:
             return {"ok": True, "settings": new_state}
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # ---- Sensor port selection ----
+
+    @app.get("/api/sensor/ports")
+    async def get_sensor_ports():
+        """List available serial ports and report the one the reader is using."""
+        reader = app_state.get("reader")
+        settings = app_state.get("settings")
+        return {
+            "current": getattr(reader, "port", None),
+            "saved": getattr(settings, "sensor_port", "") if settings else "",
+            "available": list_available_ports(),
+        }
+
+    @app.post("/api/sensor/port")
+    async def set_sensor_port(req: SensorPortRequest):
+        """Set (or clear, via null/empty) the sensor serial port.
+
+        Persists to settings.json and reconnects the reader without restart.
+        """
+        reader = app_state.get("reader")
+        settings = app_state.get("settings")
+        if reader is None:
+            return JSONResponse({"error": "Reader not available"}, status_code=500)
+
+        raw_value = req.port or ""
+        normalized = reader.set_port(raw_value)
+
+        if settings is not None:
+            try:
+                settings.update({"sensor_port": normalized or ""})
+            except ValueError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+
+        return {"ok": True, "current": normalized}
 
     @app.post("/api/weather/locations")
     async def search_weather_locations(req: WeatherLocationRequest):
