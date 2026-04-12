@@ -68,6 +68,9 @@ class Settings:
     openai_api_key: str = ""
     openai_model: str = ""             # blank = use env/default model
 
+    # Sensor (ESP32) USB serial port. Blank = auto-detect.
+    sensor_port: str = ""
+
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @classmethod
@@ -140,6 +143,7 @@ class Settings:
                     "weather_location_label",
                     "openai_api_key",
                     "openai_model",
+                    "sensor_port",
                 ):
                     val = "" if val is None else str(val)
 

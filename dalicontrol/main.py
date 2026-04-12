@@ -263,16 +263,36 @@ def main():
         # A single lock for ALL lamp actions (sensor thread + AI thread + web)
         lamp_lock = threading.Lock()
 
-        # ---- Sensor reader init (auto-detect if port not specified) ----
-        sensor_port = args.sensor_port
+        # ---- Sensor reader init ----
+        # Resolution order for the sensor port:
+        #   1. --sensor-port CLI arg (explicit override)
+        #   2. settings.sensor_port (last value persisted from web UI / auto-detect)
+        #   3. one startup auto-detect pass
+        #   4. None -> reader thread keeps probing in the background
+        sensor_port: Optional[str] = args.sensor_port or (settings.sensor_port or None)
+
         if not sensor_port and not args.dry_run:
             sensor_port = detect_sensor_port(baud=args.sensor_baud)
             if sensor_port:
                 logging.info("Auto-detected ESP32 sensor on %s", sensor_port)
             else:
-                logging.warning("No ESP32 sensor detected. Sensor data will be unavailable.")
+                logging.warning(
+                    "No ESP32 sensor detected at startup; reader will keep scanning."
+                )
 
-        reader = UsbOccupancyReader(sensor_port or "NONE", args.sensor_baud)
+        def _persist_sensor_port(port: str) -> None:
+            try:
+                if settings.sensor_port != port:
+                    settings.update({"sensor_port": port})
+                    logging.info("Saved sensor_port=%s to settings.", port)
+            except Exception as exc:
+                logging.warning("Could not persist sensor_port: %s", exc)
+
+        reader = UsbOccupancyReader(
+            sensor_port,
+            args.sensor_baud,
+            on_port_detected=_persist_sensor_port,
+        )
         reader.start()
 
         stop = threading.Event()
