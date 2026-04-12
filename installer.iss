@@ -45,6 +45,21 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Main application (entire dist\KoL directory)
 Source: "dist\KoL\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; ------------------------------------------------------------
+; Silicon Labs CP210x USB-to-UART Virtual COM Port driver.
+; Staged to {tmp} during install and registered with pnputil
+; (see [Run] below). Download the "CP210x Universal Windows
+; Driver" ZIP from Silicon Labs and extract it into
+;   drivers\cp210x\
+; so that drivers\cp210x\silabser.inf exists.
+; See README-build.md for details.
+;
+; This folder is gitignored; the [Files] line is skipped
+; automatically if the folder is empty (skipifsourcedoesntexist).
+; ------------------------------------------------------------
+Source: "drivers\cp210x\*"; DestDir: "{tmp}\cp210x"; \
+    Flags: deleteafterinstall recursesubdirs createallsubdirs skipifsourcedoesntexist
+
 [Dirs]
 ; Writable data directory (preserved across upgrades)
 Name: "{app}\data"; Permissions: users-modify
@@ -58,6 +73,15 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; Install the CP210x driver with pnputil (built into Windows 7+). Idempotent:
+; re-running a setup with the same INF is a no-op. We only run this when the
+; staged INF is actually present (see Check function).
+Filename: "{sys}\pnputil.exe"; \
+    Parameters: "/add-driver ""{tmp}\cp210x\silabser.inf"" /install"; \
+    StatusMsg: "Installing CP210x USB-to-UART driver (Silicon Labs)..."; \
+    Flags: waituntilterminated runhidden; \
+    Check: Cp210xDriverStaged
+
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch KoL Adaptive Lighting"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
@@ -65,6 +89,13 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch KoL Adaptive Lighting"; 
 Type: filesandordirs; Name: "{app}\__pycache__"
 
 [Code]
+// True when the CP210x driver INF has been staged to {tmp}\cp210x.
+// Used to skip the pnputil [Run] step on builds that don't bundle the driver.
+function Cp210xDriverStaged(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{tmp}\cp210x\silabser.inf'));
+end;
+
 // Warn user that data directory is preserved on uninstall
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin

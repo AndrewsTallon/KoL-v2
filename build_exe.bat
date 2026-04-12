@@ -40,6 +40,25 @@ if not exist "dist\KoL\data\telemetry" mkdir "dist\KoL\data\telemetry"
 if not exist "dist\KoL\data\models" mkdir "dist\KoL\data\models"
 if not exist "dist\KoL\data\profiles" mkdir "dist\KoL\data\profiles"
 
+REM --- CP210x driver sanity check (for installer build only) ---
+echo.
+if exist "drivers\cp210x\silabser.inf" (
+    echo [OK] CP210x driver found at drivers\cp210x\silabser.inf
+    echo      The installer will register it with pnputil during setup.
+) else (
+    echo [WARN] drivers\cp210x\silabser.inf NOT found.
+    echo        The Inno Setup installer will still compile, but it
+    echo        will NOT install the CP210x USB-to-UART driver, and
+    echo        end-user PCs without this driver will not see the
+    echo        ESP32 sensor as a COM port ^(Device Manager "Code 28"^).
+    echo.
+    echo        Download the "CP210x Universal Windows Driver" ZIP
+    echo        from Silicon Labs and extract it so that
+    echo            drivers\cp210x\silabser.inf
+    echo        exists, then re-run this script.
+    echo        See README-build.md for details.
+)
+
 echo.
 echo ============================================================
 echo  BUILD COMPLETE

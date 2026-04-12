@@ -132,20 +132,63 @@ KoL.exe --sensor-port COM3 --web-port 9090
 ## Building the Installer (Optional)
 
 1. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php)
-2. First run `build_exe.bat` to create `dist/KoL/`
-3. Open `installer.iss` in Inno Setup Compiler
-4. Update `#define MyAppVersion` if needed
-5. Click **Build > Compile**
+2. **Stage the CP210x USB driver** (see next section) so that end-user PCs
+   can talk to the ESP32 sensor out of the box
+3. Run `build_exe.bat` to create `dist/KoL/`
+4. Open `installer.iss` in Inno Setup Compiler
+5. Update `#define MyAppVersion` if needed
+6. Click **Build > Compile**
 
 **Output**: `Output/KoL-Setup-{version}.exe`
 
 The installer:
 - Copies the application to Program Files
+- Silently installs the CP210x USB-to-UART driver via `pnputil`
+  (only if `drivers/cp210x/silabser.inf` is present at build time)
 - Creates Start Menu shortcuts
 - Optional desktop shortcut
 - Creates writable `data/`, `data/telemetry`, `data/models`, and `data/profiles`
   directories with user permissions
 - On uninstall, asks whether to keep user data
+
+### Bundling the CP210x USB Driver
+
+The ESP32 sensor speaks to the PC through a Silicon Labs CP2102 USB-to-UART
+bridge. On a Windows PC that has never had the driver installed, the sensor
+appears in Device Manager as an unknown device ("Code 28 — The drivers for
+this device are not installed") and **no COM port is ever created**, so the
+app cannot see the sensor.
+
+To make the installer handle this automatically:
+
+1. Download the **CP210x Universal Windows Driver** package from Silicon
+   Labs (search for "CP210x USB to UART Bridge VCP Drivers" on
+   silabs.com). It ships as a ZIP (`CP210x_Universal_Windows_Driver.zip`).
+2. Extract it into `drivers/cp210x/` in the repo so that
+   `drivers/cp210x/silabser.inf` exists.
+3. Run `build_exe.bat` — it prints `[OK] CP210x driver found` when the INF
+   is detected.
+4. Compile `installer.iss` as usual.
+
+See `drivers/cp210x/README.txt` for the full checklist. The driver files
+themselves are gitignored (they're a third-party redistributable owned by
+Silicon Labs); only the README is tracked.
+
+At install time on the target PC, Inno Setup (running as admin) executes:
+
+```
+pnputil /add-driver drivers\cp210x\silabser.inf /install
+```
+
+This stages the driver into the Windows Driver Store and installs it for
+any currently-connected CP2102 device. `pnputil` ships with Windows 7+, so
+no additional redistributable is required. The operation is idempotent —
+re-running the installer on a machine that already has the driver is a
+no-op.
+
+If you omit step 1-3, the installer still compiles, but it skips the
+driver-install step (guarded by an Inno Setup `Check` function) and you'll
+need some other mechanism to get the driver onto target PCs.
 
 ---
 
@@ -207,10 +250,21 @@ correctly by looking at the console log output.
 
 ### USB device not detected
 
-- Check Device Manager for COM port assignment
-- Ensure the ESP32 driver is installed (CP2102 or CH340)
+- **First**: check Device Manager. If the ESP32 appears under
+  **"Other devices"** as `CP2102 USB to UART Bridge Controller` with a
+  yellow ⚠ and "Code 28", the CP210x driver is missing — see the
+  "Bundling the CP210x USB Driver" section above. The packaged installer
+  will drop it automatically if you staged `drivers/cp210x/` before
+  building.
+- If nothing at all appears in Device Manager when you plug the cable in,
+  the cable is likely **power-only** (common with cheap micro-USB
+  cables) — swap to a data-capable cable.
+- If the ESP32 enumerates under **"Ports (COM & LPT)"** (e.g.
+  `Silicon Labs CP210x USB to UART Bridge (COM3)`) but the app still
+  can't see it, check whether another program (Arduino IDE Serial
+  Monitor, PuTTY, etc.) is holding the port open.
 - For the DALI controller: the `hidapi` DLL is bundled automatically by
-  PyInstaller
+  PyInstaller.
 
 ### Console window closes immediately
 

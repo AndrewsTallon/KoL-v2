@@ -14,3 +14,8 @@ dist/
 # Inno Setup output
 Output/
 dalicontrol/settings.json
+
+# CP210x driver blobs (downloaded from Silicon Labs during packaging —
+# see drivers/cp210x/README.txt). Keep the folder + README tracked.
+drivers/cp210x/*
+!drivers/cp210x/README.txt
