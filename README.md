@@ -395,15 +395,33 @@ Telemetry is logged to `dalicontrol/telemetry/` as CSV files named `run_YYYYMMDD
 | `confirm_count` | int | Confirmation window count (0–5) |
 | `filter_stage` | string | Active filter: "instant", "confirmed", "debounced" |
 | `lamp_is_off` | bool | Lamp power state |
-| `lamp_level` | int | DALI brightness level (0–254) |
+| `lamp_level` | int | Raw DALI direct arc brightness level (0-254); this may retain the last level while off |
+| `lamp_brightness_pct` | float | Effective brightness percentage; 0 when `lamp_is_off` is true |
+| `lamp_brightness_frac` | float | Effective brightness fraction for analysis and energy estimation |
 | `lamp_temp_dtr` | int | DALI DTR register (color temp) |
 | `lamp_temp_dtr1` | int | DALI DTR1 register (color temp) |
 | `cct_kelvin` | int | Color temperature in Kelvin |
 | `runtime_s` | float | Total lamp-on runtime (seconds) |
+| `sample_dt_s` | float | Seconds since previous telemetry row |
+| `lamp_estimated_power_w` | float | Estimated instantaneous power from nominal power and effective brightness |
+| `energy_est_wh_cumulative` | float | Cumulative estimated watt-hours for the current run |
+| `lighting_during_absence` | bool | Lamp on while filtered occupancy is false |
+| `sample_type` | string | `heartbeat`, `ai_action`, or `user_command` |
 | `action` | string | Command executed (e.g., "set_brightness_pct(75)") |
 | `reason` | string | Machine-readable reason code |
 | `rationale` | string | Human-readable decision explanation |
 | `user_text` | string | Natural language command (if user-initiated) |
+| `rec_brightness_pct` | float | AI recommended brightness percentage for action rows |
+| `rec_cct_kelvin` | int | AI recommended CCT for action rows |
+| `brightness_delta_pct` | float | Difference between current and recommended brightness |
+| `cct_delta_kelvin` | int | Difference between current and recommended CCT |
+| `brightness_final_pct` | float | Final clamped AI brightness recommendation |
+| `brightness_unclamped_pct` | float | AI brightness recommendation before clamping |
+| `ml_brightness_adjust_pct` | float | Model-derived brightness adjustment |
+| `preference_brightness_adjust_pct` | float | Participant-preference brightness adjustment |
+| `weather_brightness_adjust_pct` | float | Weather-derived brightness adjustment |
+| `model_type` | string | Sources used for brightness and CCT recommendations |
+| `cct_reasoning` | string | Human-readable CCT reasoning |
 
 ### Logging Frequency
 

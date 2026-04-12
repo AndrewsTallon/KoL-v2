@@ -207,6 +207,26 @@ def create_app(app_state: dict) -> FastAPI:
     """
     app = FastAPI(title="KoL Lighting Control", docs_url="/api/docs")
 
+    def log_user_lamp_action(action: str, user_text: str = "") -> None:
+        telem = app_state.get("telem")
+        if not telem:
+            return
+        from .main import build_row
+
+        snap = app_state["reader"].snapshot()
+        telem.log_row(build_row(
+            mode=app_state.get("mode", ""),
+            snap=snap,
+            lamp=app_state["lamp"],
+            runtime_tracker=app_state["runtime_tracker"],
+            action=action,
+            reason="web_user_command",
+            user_text=user_text,
+            sample_type="user_command",
+            nominal_power_watts=app_state.get("nominal_power_watts", 40.0),
+            **_profile_fields(app_state),
+        ))
+
     # Security middleware (order matters — headers first, then auth)
     app.add_middleware(_SecurityHeadersMiddleware)
     app.add_middleware(_ApiKeyMiddleware)
@@ -270,6 +290,7 @@ def create_app(app_state: dict) -> FastAPI:
         with app_state["lamp_lock"]:
             app_state["lamp"].set_brightness_pct(req.pct)
             _save_state(app_state)
+        log_user_lamp_action(f"set_brightness_pct({req.pct:g})", f"web brightness {req.pct:g}%")
         return {"ok": True, "brightness_pct": req.pct}
 
     @app.post("/api/lamp/cct")
@@ -278,6 +299,7 @@ def create_app(app_state: dict) -> FastAPI:
         with app_state["lamp_lock"]:
             app_state["lamp"].set_temp_raw(dtr, dtr1)
             _save_state(app_state)
+        log_user_lamp_action(f"set_cct({req.kelvin}K)", f"web cct {req.kelvin}K")
         return {"ok": True, "cct_kelvin": req.kelvin}
 
     @app.post("/api/lamp/on")
@@ -285,6 +307,7 @@ def create_app(app_state: dict) -> FastAPI:
         with app_state["lamp_lock"]:
             app_state["lamp"].on_last()
             _save_state(app_state)
+        log_user_lamp_action("on_last()", "web on")
         return {"ok": True}
 
     @app.post("/api/lamp/off")
@@ -292,6 +315,7 @@ def create_app(app_state: dict) -> FastAPI:
         with app_state["lamp_lock"]:
             app_state["lamp"].off()
             _save_state(app_state)
+        log_user_lamp_action("off()", "web off")
         return {"ok": True}
 
     # ---- Mode ----
@@ -342,7 +366,19 @@ def create_app(app_state: dict) -> FastAPI:
                                 brightness_reasoning=context.get("brightness_reasoning", "") if context else "",
                                 target_lux=context.get("target_lux", "") if context else "",
                                 brightness_base_pct=context.get("brightness_base_pct", "") if context else "",
+                                rec_brightness_pct=context.get("rec_brightness", "") if context else "",
+                                rec_cct_kelvin=context.get("rec_cct", "") if context else "",
+                                brightness_delta_pct=context.get("brightness_delta", "") if context else "",
+                                cct_delta_kelvin=context.get("cct_delta", "") if context else "",
+                                brightness_final_pct=context.get("brightness_final_pct", "") if context else "",
+                                brightness_unclamped_pct=context.get("brightness_unclamped_pct", "") if context else "",
+                                ml_brightness_adjust_pct=context.get("ml_brightness_adjust_pct", "") if context else "",
+                                preference_brightness_adjust_pct=context.get("preference_brightness_adjust_pct", "") if context else "",
                                 weather_brightness_adjust_pct=context.get("weather_brightness_adjust_pct", "") if context else "",
+                                model_type=context.get("model_type", "") if context else "",
+                                cct_reasoning=context.get("cct_reasoning", "") if context else "",
+                                sample_type="ai_action",
+                                nominal_power_watts=app_state.get("nominal_power_watts", 40.0),
                                 **_profile_fields(app_state),
                             ))
                         record_decision(

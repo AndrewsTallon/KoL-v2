@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from .ai_operator import AIOperator, load_state, save_state
-from .cct_utils import dtr_to_kelvin
+from .cct_utils import dtr_to_kelvin, level_to_pct
 from .dali_controls import DaliControls
 from .dali_transport import DaliHidTransport
 from .lamp_state import LampController
@@ -53,10 +53,17 @@ class TelemetryLogger:
         "filter_stage",
         "lamp_is_off",
         "lamp_level",
+        "lamp_brightness_pct",
+        "lamp_brightness_frac",
         "lamp_temp_dtr",
         "lamp_temp_dtr1",
         "cct_kelvin",
         "runtime_s",
+        "sample_dt_s",
+        "lamp_estimated_power_w",
+        "energy_est_wh_cumulative",
+        "lighting_during_absence",
+        "sample_type",
         "action",
         "reason",
         "rationale",
@@ -66,7 +73,17 @@ class TelemetryLogger:
         "brightness_reasoning",
         "target_lux",
         "brightness_base_pct",
+        "rec_brightness_pct",
+        "rec_cct_kelvin",
+        "brightness_delta_pct",
+        "cct_delta_kelvin",
+        "brightness_final_pct",
+        "brightness_unclamped_pct",
+        "ml_brightness_adjust_pct",
+        "preference_brightness_adjust_pct",
         "weather_brightness_adjust_pct",
+        "model_type",
+        "cct_reasoning",
     ]
 
     def __init__(self, mode: str):
@@ -77,6 +94,7 @@ class TelemetryLogger:
         self._lock = threading.Lock()
         self._fh = None
         self._writer = None
+        self._last_ts_epoch = None
         self._open()
 
     def _open(self):
@@ -89,6 +107,18 @@ class TelemetryLogger:
 
     def log_row(self, row: dict):
         with self._lock:
+            ts_epoch = row.get("ts_epoch")
+            try:
+                ts_epoch = float(ts_epoch)
+            except (TypeError, ValueError):
+                ts_epoch = None
+            if row.get("sample_dt_s", "") in ("", None):
+                sample_dt = 0.0 if self._last_ts_epoch is None or ts_epoch is None else max(
+                    0.0, ts_epoch - self._last_ts_epoch
+                )
+                row["sample_dt_s"] = round(sample_dt, 3)
+            if ts_epoch is not None:
+                self._last_ts_epoch = ts_epoch
             self._writer.writerow(row)
             self._fh.flush()
 
@@ -117,15 +147,34 @@ def build_row(
     brightness_reasoning: str = "",
     target_lux: str = "",
     brightness_base_pct: str = "",
+    rec_brightness_pct: str = "",
+    rec_cct_kelvin: str = "",
+    brightness_delta_pct: str = "",
+    cct_delta_kelvin: str = "",
+    brightness_final_pct: str = "",
+    brightness_unclamped_pct: str = "",
+    ml_brightness_adjust_pct: str = "",
+    preference_brightness_adjust_pct: str = "",
     weather_brightness_adjust_pct: str = "",
+    model_type: str = "",
+    cct_reasoning: str = "",
+    sample_type: str = "heartbeat",
     profile_id: str = "",
     profile_name: str = "",
+    nominal_power_watts: float = 40.0,
 ) -> dict:
     now_epoch = time.time()
     now_iso = datetime.fromtimestamp(now_epoch).isoformat(timespec="seconds")
 
     sensor_age_s = (now_epoch - snap.updated_at) if getattr(snap, "updated_at", 0.0) else -1.0
     temp_dtr, temp_dtr1 = lamp.state.last_temp
+    lamp_is_off = bool(lamp.state.is_off)
+    lamp_level = int(lamp.state.last_level)
+    brightness_pct = 0.0 if lamp_is_off else level_to_pct(lamp_level)
+    brightness_frac = round(brightness_pct / 100.0, 4)
+    occupied = getattr(snap, "filt_occupied", None)
+    lighting_during_absence = (not lamp_is_off) and occupied not in (True, "True", "true", 1, "1")
+    estimated_power_w = 0.0 if lamp_is_off else float(nominal_power_watts) * brightness_frac
 
     return {
         "ts_epoch": round(now_epoch, 3),
@@ -149,12 +198,19 @@ def build_row(
         "sensor_seq": getattr(snap, "sensor_seq", None),
         "confirm_count": getattr(snap, "confirm_count", None),
         "filter_stage": getattr(snap, "filter_stage", None),
-        "lamp_is_off": lamp.state.is_off,
-        "lamp_level": lamp.state.last_level,
+        "lamp_is_off": lamp_is_off,
+        "lamp_level": lamp_level,
+        "lamp_brightness_pct": round(brightness_pct, 1),
+        "lamp_brightness_frac": brightness_frac,
         "lamp_temp_dtr": temp_dtr,
         "lamp_temp_dtr1": temp_dtr1,
         "cct_kelvin": dtr_to_kelvin(temp_dtr, temp_dtr1),
         "runtime_s": round(runtime_tracker.get("total_s", 0), 1),
+        "sample_dt_s": "",
+        "lamp_estimated_power_w": round(estimated_power_w, 3),
+        "energy_est_wh_cumulative": round(runtime_tracker.get("energy_wh", 0), 4),
+        "lighting_during_absence": lighting_during_absence,
+        "sample_type": sample_type,
         "action": action,
         "reason": reason,
         "rationale": rationale,
@@ -164,7 +220,17 @@ def build_row(
         "brightness_reasoning": brightness_reasoning,
         "target_lux": target_lux,
         "brightness_base_pct": brightness_base_pct,
+        "rec_brightness_pct": rec_brightness_pct,
+        "rec_cct_kelvin": rec_cct_kelvin,
+        "brightness_delta_pct": brightness_delta_pct,
+        "cct_delta_kelvin": cct_delta_kelvin,
+        "brightness_final_pct": brightness_final_pct,
+        "brightness_unclamped_pct": brightness_unclamped_pct,
+        "ml_brightness_adjust_pct": ml_brightness_adjust_pct,
+        "preference_brightness_adjust_pct": preference_brightness_adjust_pct,
         "weather_brightness_adjust_pct": weather_brightness_adjust_pct,
+        "model_type": model_type,
+        "cct_reasoning": cct_reasoning,
     }
 
 
@@ -366,7 +432,19 @@ def main():
                     brightness_reasoning=context.get("brightness_reasoning", "") if context else "",
                     target_lux=context.get("target_lux", "") if context else "",
                     brightness_base_pct=context.get("brightness_base_pct", "") if context else "",
+                    rec_brightness_pct=context.get("rec_brightness", "") if context else "",
+                    rec_cct_kelvin=context.get("rec_cct", "") if context else "",
+                    brightness_delta_pct=context.get("brightness_delta", "") if context else "",
+                    cct_delta_kelvin=context.get("cct_delta", "") if context else "",
+                    brightness_final_pct=context.get("brightness_final_pct", "") if context else "",
+                    brightness_unclamped_pct=context.get("brightness_unclamped_pct", "") if context else "",
+                    ml_brightness_adjust_pct=context.get("ml_brightness_adjust_pct", "") if context else "",
+                    preference_brightness_adjust_pct=context.get("preference_brightness_adjust_pct", "") if context else "",
                     weather_brightness_adjust_pct=context.get("weather_brightness_adjust_pct", "") if context else "",
+                    model_type=context.get("model_type", "") if context else "",
+                    cct_reasoning=context.get("cct_reasoning", "") if context else "",
+                    sample_type="ai_action",
+                    nominal_power_watts=settings.nominal_power_watts,
                     **active_profile_fields(),
                 ))
                 record_decision(
@@ -407,6 +485,8 @@ def main():
                     telem.log_row(build_row(
                         mode=app_state["mode"], snap=snap, lamp=lamp,
                         runtime_tracker=runtime_tracker,
+                        sample_type="heartbeat",
+                        nominal_power_watts=settings.nominal_power_watts,
                         **active_profile_fields(),
                     ))
                     last_telem_at = now
@@ -465,6 +545,8 @@ def main():
                             action="user_command",
                             reason="user_text",
                             user_text=user_text,
+                            sample_type="user_command",
+                            nominal_power_watts=settings.nominal_power_watts,
                             **active_profile_fields(),
                         )
                     )
